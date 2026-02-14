@@ -112,8 +112,6 @@ get_project_path() {
 }
 
 list_projects() {
-    echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
-    echo ""
     echo -e "${BOLD}Projects${NC}"
     echo ""
 
