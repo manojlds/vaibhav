@@ -34,6 +34,15 @@ curl -fsSL https://raw.githubusercontent.com/manojlds/vaibhav/main/setup-termux.
 bash setup-termux.sh
 ```
 
+The setup will:
+- Install OpenSSH
+- Generate an SSH key and copy it to your desktop (via `ssh-copy-id`)
+- Configure SSH connection to your desktop
+- Download and install the `vaibhav` command
+- Configure remote mode
+- Set up extra keyboard keys for coding
+- Optionally install FiraCode Nerd Font for proper icon rendering
+
 ## Usage
 
 Same command works everywhere — on the desktop it runs locally, from Termux it automatically SSHes in:
@@ -47,7 +56,7 @@ vaibhav myapp opencode      # Open myapp with OpenCode
 vaibhav add myapp ~/myapp   # Register a new project
 vaibhav scan                # Auto-register all projects in configured directory
 vaibhav scan ~/other        # Scan a specific directory
-desktop                     # Connect to last tmux session (Termux alias)
+vaibhav --version           # Check installed version
 ```
 
 ### Switching projects
@@ -76,6 +85,18 @@ VAIBHAV_SSH_HOST="desktop"                    # SSH host alias
 
 Project registry is stored at `~/.config/vaibhav/projects`.
 
+## Updating
+
+On your phone, update the `vaibhav` command to the latest version:
+
+```bash
+rm ~/bin/vaibhav && curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/manojlds/vaibhav/main/bin/vaibhav -o ~/bin/vaibhav && chmod +x ~/bin/vaibhav
+```
+
+Check the version with `vaibhav --version`.
+
+On the desktop, `vaibhav` is symlinked to the repo — just `git pull` to update.
+
 ## Project structure
 
 ```
@@ -94,3 +115,4 @@ vaibhav/
 - **Tailscale** gives you a stable connection even when switching WiFi/mobile networks
 - **Termux extra keys**: Swipe from the left edge to toggle the extra keyboard row with `ESC`, `CTRL`, `ALT`, `TAB`, and common coding symbols
 - **Pinch to zoom** in Termux to adjust text size for comfortable reading on your phone
+- **FiraCode Nerd Font** is installed during Termux setup for proper icon rendering (starship, etc.)
