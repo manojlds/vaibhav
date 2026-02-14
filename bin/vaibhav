@@ -38,6 +38,7 @@ VAIBHAV_DESKTOP_HOST="${VAIBHAV_DESKTOP_HOST:-}"
 VAIBHAV_SSH_HOST="${VAIBHAV_SSH_HOST:-desktop}"
 
 if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
+    echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
     case "${1:-}" in
         init)
             ;; # init always runs locally
