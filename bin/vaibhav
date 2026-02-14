@@ -11,6 +11,8 @@
 
 set -euo pipefail
 
+VAIBHAV_VERSION="0.1.0"
+
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
 PROJECTS_FILE="$CONFIG_DIR/projects"
@@ -109,6 +111,8 @@ get_project_path() {
 }
 
 list_projects() {
+    echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
+    echo ""
     echo -e "${BOLD}Projects${NC}"
     echo ""
 
@@ -306,7 +310,7 @@ open_project() {
 }
 
 show_usage() {
-    echo -e "${BOLD}vaibhav${NC} — Project session manager for AI coding tools"
+    echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC} — Project session manager for AI coding tools"
     echo ""
     echo -e "${BOLD}Usage:${NC}"
     echo "  vaibhav init                Interactive setup"
@@ -329,6 +333,9 @@ show_usage() {
 case "${1:-}" in
     ""|help|-h|--help)
         show_usage
+        ;;
+    version|-v|--version)
+        echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
         ;;
     init)
         init_config
