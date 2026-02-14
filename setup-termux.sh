@@ -69,28 +69,23 @@ fi
 
 # --- Copy SSH key to desktop ---
 step "Setting up SSH key on desktop"
-echo -e "  ${DIM}Attempting ssh-copy-id (you'll need to enter your desktop password once)${NC}"
-echo ""
-if ssh-copy-id -i ~/.ssh/id_ed25519.pub desktop 2>/dev/null; then
-    ok "SSH key copied to desktop"
-else
-    warn "ssh-copy-id failed. Copy this key to your desktop manually:"
-    echo ""
-    cat ~/.ssh/id_ed25519.pub
-    echo ""
-    echo -e "  ${DIM}On your desktop, run:${NC}"
-    echo -e "  ${DIM}echo '<paste_key>' >> ~/.ssh/authorized_keys${NC}"
-    echo ""
-    read -rp "Press Enter once done..."
-fi
-
-# --- Test SSH connection ---
-step "Testing SSH connection"
 if ssh -o BatchMode=yes -o ConnectTimeout=5 desktop "echo ok" &>/dev/null; then
-    ok "SSH connection to desktop works"
+    ok "SSH key already works"
 else
-    warn "Could not connect to desktop via SSH"
-    echo -e "  ${DIM}Make sure Tailscale is running on both devices${NC}"
+    echo -e "  ${DIM}Attempting ssh-copy-id (you'll need to enter your desktop password once)${NC}"
+    echo ""
+    if ssh-copy-id -i ~/.ssh/id_ed25519.pub desktop 2>/dev/null; then
+        ok "SSH key copied to desktop"
+    else
+        warn "ssh-copy-id failed. Copy this key to your desktop manually:"
+        echo ""
+        cat ~/.ssh/id_ed25519.pub
+        echo ""
+        echo -e "  ${DIM}On your desktop, run:${NC}"
+        echo -e "  ${DIM}echo '<paste_key>' >> ~/.ssh/authorized_keys${NC}"
+        echo ""
+        read -rp "Press Enter once done..."
+    fi
 fi
 
 # --- Install vaibhav command ---
