@@ -97,14 +97,7 @@ fi
 step "Installing vaibhav command"
 mkdir -p ~/bin
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "")"
-REPO_URL="https://raw.githubusercontent.com/manojlds/vaibhav/main"
-
-if [[ -n "$SCRIPT_DIR" ]] && [[ -f "$SCRIPT_DIR/bin/vaibhav" ]]; then
-    cp "$SCRIPT_DIR/bin/vaibhav" ~/bin/vaibhav
-else
-    curl -fsSL "${REPO_URL}/bin/vaibhav" -o ~/bin/vaibhav
-fi
+curl -fsSL "https://raw.githubusercontent.com/manojlds/vaibhav/main/bin/vaibhav" -o ~/bin/vaibhav
 chmod +x ~/bin/vaibhav
 ok "~/bin/vaibhav installed"
 
