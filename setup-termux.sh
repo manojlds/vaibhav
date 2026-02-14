@@ -151,6 +151,21 @@ else
     ok "Extra keys already configured"
 fi
 
+# --- Font ---
+step "Font setup"
+if [[ -f ~/.termux/font.ttf ]]; then
+    ok "Custom font already installed"
+else
+    read -rp "Install FiraCode Nerd Font? (recommended for icons) [Y/n] " yn
+    if [[ ! "$yn" =~ ^[Nn]$ ]]; then
+        curl -fsSL "https://github.com/ryanoasis/nerd-fonts/raw/HEAD/patched-fonts/FiraCode/Regular/FiraCodeNerdFont-Regular.ttf" -o ~/.termux/font.ttf
+        ok "FiraCode Nerd Font installed"
+        termux-reload-settings 2>/dev/null || true
+    else
+        ok "Skipped"
+    fi
+fi
+
 # --- Summary ---
 echo ""
 echo -e "${BOLD}${GREEN}Termux setup complete!${NC}"
