@@ -43,10 +43,10 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
         init)
             ;; # init always runs locally
         list|ls|help|-h|--help)
-            exec ssh "$VAIBHAV_SSH_HOST" "\$HOME/bin/vaibhav $*"
+            exec ssh "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             ;;
         *)
-            exec ssh -t "$VAIBHAV_SSH_HOST" "\$HOME/bin/vaibhav $*"
+            exec ssh -t "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             ;;
     esac
 fi
