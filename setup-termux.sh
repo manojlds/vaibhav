@@ -38,6 +38,20 @@ pkg update -y
 pkg install -y openssh
 ok "openssh installed"
 
+# --- mosh (optional) ---
+step "Mosh (optional)"
+read -rp "  Install mosh for resilient mobile connections? [y/N] " yn
+if [[ "$yn" =~ ^[Yy]$ ]]; then
+    if command -v mosh &>/dev/null; then
+        ok "mosh already installed"
+    else
+        pkg install -y mosh
+        ok "mosh installed"
+    fi
+else
+    skip "mosh (can install later with: pkg install mosh)"
+fi
+
 # --- SSH key ---
 step "Setting up SSH key"
 mkdir -p ~/.ssh

@@ -53,6 +53,20 @@ else
     fi
 fi
 
+# --- mosh (optional) ---
+step "Mosh (optional)"
+read -rp "  Install mosh for resilient mobile connections? [y/N] " yn
+if [[ "$yn" =~ ^[Yy]$ ]]; then
+    if command -v mosh-server &>/dev/null; then
+        ok "mosh already installed"
+    else
+        sudo apt-get update -qq && sudo apt-get install -y -qq mosh
+        ok "mosh installed"
+    fi
+else
+    skip "mosh (can install later with: sudo apt install mosh)"
+fi
+
 # --- vaibhav script ---
 step "Installing vaibhav command"
 mkdir -p ~/bin

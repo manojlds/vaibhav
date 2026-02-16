@@ -5,7 +5,7 @@ Remote AI coding environment — run tools like Amp, Claude Code, Codex, and Ope
 ## How it works
 
 ```
-Android (Termux) → SSH over Tailscale → Ubuntu Desktop → tmux sessions → AI tools
+Android (Termux) → SSH/mosh over Tailscale → Ubuntu Desktop → tmux sessions → AI tools
 ```
 
 Each project gets its own tmux session. Sessions persist when you disconnect — close Termux, reopen later, and pick up exactly where you left off.
@@ -23,6 +23,7 @@ This will:
 - Install and configure tmux
 - Install the `vaibhav` command
 - Set up SSH server
+- Optionally install mosh for resilient mobile connections
 - Run `vaibhav init` to configure your projects directory and scan for projects
 
 ### 2. Termux setup (Android)
@@ -35,7 +36,7 @@ bash setup-termux.sh
 ```
 
 The setup will:
-- Install OpenSSH
+- Install OpenSSH (and optionally mosh)
 - Generate an SSH key and copy it to your desktop (via `ssh-copy-id`)
 - Configure SSH connection to your desktop
 - Download and install the `vaibhav` command
@@ -53,6 +54,7 @@ vaibhav list                # List all projects and active sessions
 vaibhav heimdall amp        # Open heimdall project with Amp
 vaibhav drs claude          # Open drs with Claude Code
 vaibhav myapp opencode      # Open myapp with OpenCode
+vaibhav heimdall amp --mosh # Open with Amp via mosh
 vaibhav add myapp ~/myapp   # Register a new project
 vaibhav scan                # Auto-register all projects in configured directory
 vaibhav scan ~/other        # Scan a specific directory
@@ -81,6 +83,7 @@ Once inside tmux, you can switch projects without disconnecting:
 VAIBHAV_PROJECTS_DIR="/home/user/projects"    # Where your projects live
 VAIBHAV_DESKTOP_HOST="mypc"                   # Desktop hostname (enables remote mode)
 VAIBHAV_SSH_HOST="desktop"                    # SSH host alias
+VAIBHAV_USE_MOSH="false"                      # Use mosh by default (true/false)
 ```
 
 Project registry is stored at `~/.config/vaibhav/projects`.

@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.1.2"
+VAIBHAV_VERSION="0.2.0"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -36,9 +36,23 @@ fi
 # --- Remote mode: if not on the desktop, SSH in ---
 VAIBHAV_DESKTOP_HOST="${VAIBHAV_DESKTOP_HOST:-}"
 VAIBHAV_SSH_HOST="${VAIBHAV_SSH_HOST:-desktop}"
+VAIBHAV_USE_MOSH="${VAIBHAV_USE_MOSH:-false}"
 
 if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
     echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
+
+    # Check for --mosh flag
+    use_mosh="$VAIBHAV_USE_MOSH"
+    args=()
+    for arg in "$@"; do
+        if [[ "$arg" == "--mosh" ]]; then
+            use_mosh=true
+        else
+            args+=("$arg")
+        fi
+    done
+    set -- "${args[@]+"${args[@]}"}"
+
     case "${1:-}" in
         init)
             ;; # init always runs locally
@@ -46,7 +60,15 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
             exec ssh "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             ;;
         *)
-            exec ssh -t "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
+            if [[ "$use_mosh" == "true" ]] && command -v mosh &>/dev/null; then
+                echo -e "  ${DIM}connecting via mosh...${NC}"
+                exec mosh "$VAIBHAV_SSH_HOST" -- bash -lic "\$HOME/bin/vaibhav $*"
+            else
+                if [[ "$use_mosh" == "true" ]]; then
+                    echo -e "  ${YELLOW}!${NC} ${DIM}mosh not found, falling back to ssh${NC}"
+                fi
+                exec ssh -t "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
+            fi
             ;;
     esac
 fi
@@ -80,6 +102,15 @@ init_config() {
     read -rp "SSH host alias [${default_ssh_host}]: " input_ssh_host
     local ssh_host="${input_ssh_host:-$default_ssh_host}"
 
+    # Mosh (optional)
+    local current_use_mosh="${VAIBHAV_USE_MOSH:-false}"
+    local default_use_mosh="${current_use_mosh}"
+    read -rp "Use mosh by default? [y/N] " input_use_mosh
+    local use_mosh="false"
+    if [[ "$input_use_mosh" =~ ^[Yy]$ ]]; then
+        use_mosh="true"
+    fi
+
     # Write config
     mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_FILE" << EOF
@@ -87,6 +118,7 @@ init_config() {
 VAIBHAV_PROJECTS_DIR="${projects_dir}"
 VAIBHAV_DESKTOP_HOST="${desktop_host}"
 VAIBHAV_SSH_HOST="${ssh_host}"
+VAIBHAV_USE_MOSH="${use_mosh}"
 EOF
 
     echo ""
@@ -316,6 +348,8 @@ show_usage() {
     echo "  vaibhav list                List all projects and active sessions"
     echo "  vaibhav <name>              Open a project in tmux"
     echo "  vaibhav <name> <tool>       Open a project with an AI tool (amp, claude, codex, opencode)"
+    echo "  vaibhav <name> --mosh       Open a project using mosh (resilient connection)"
+    echo "  vaibhav <name> <tool> --mosh  Open with an AI tool via mosh"
     echo "  vaibhav add <name> <path>   Register a new project"
     echo "  vaibhav remove <name>       Unregister a project"
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
