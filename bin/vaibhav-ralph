@@ -1,0 +1,508 @@
+#!/usr/bin/env bash
+# vaibhav-ralph - Ralph loop utility for AI-driven development
+# Usage:
+#   vaibhav ralph init [dir]          - Auto-detect project and create .vaibhav/config.yaml
+#   vaibhav ralph add-rule "rule"     - Add a rule to the project config
+#   vaibhav ralph config              - Show current project config
+#   vaibhav ralph status              - Show PRD progress
+
+set -euo pipefail
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+RALPH_CONFIG_DIR=".vaibhav"
+RALPH_CONFIG_FILE="$RALPH_CONFIG_DIR/config.yaml"
+
+# --- Detect project language and framework ---
+detect_project() {
+    local dir="$1"
+
+    local language=""
+    local framework=""
+    local cmd_test=""
+    local cmd_lint=""
+    local cmd_build=""
+    local cmd_typecheck=""
+
+    # Node.js / TypeScript
+    if [[ -f "$dir/package.json" ]]; then
+        # Check for TypeScript
+        if [[ -f "$dir/tsconfig.json" ]] || grep -q '"typescript"' "$dir/package.json" 2>/dev/null; then
+            language="TypeScript"
+        else
+            language="JavaScript"
+        fi
+
+        # Detect framework from dependencies
+        if grep -q '"next"' "$dir/package.json" 2>/dev/null; then
+            framework="Next.js"
+        elif grep -q '"nuxt"' "$dir/package.json" 2>/dev/null; then
+            framework="Nuxt"
+        elif grep -q '"@angular/core"' "$dir/package.json" 2>/dev/null; then
+            framework="Angular"
+        elif grep -q '"svelte"' "$dir/package.json" 2>/dev/null; then
+            framework="SvelteKit"
+        elif grep -q '"react"' "$dir/package.json" 2>/dev/null; then
+            framework="React"
+        elif grep -q '"vue"' "$dir/package.json" 2>/dev/null; then
+            framework="Vue"
+        elif grep -q '"express"' "$dir/package.json" 2>/dev/null; then
+            framework="Express"
+        elif grep -q '"fastify"' "$dir/package.json" 2>/dev/null; then
+            framework="Fastify"
+        elif grep -q '"nestjs"' "$dir/package.json" 2>/dev/null || grep -q '"@nestjs/core"' "$dir/package.json" 2>/dev/null; then
+            framework="NestJS"
+        fi
+
+        # Extract scripts from package.json
+        cmd_test=$(extract_npm_script "$dir" "test")
+        cmd_lint=$(extract_npm_script "$dir" "lint")
+        cmd_build=$(extract_npm_script "$dir" "build")
+
+        # Typecheck
+        if [[ "$language" == "TypeScript" ]]; then
+            local tc_script
+            tc_script=$(extract_npm_script "$dir" "typecheck")
+            if [[ -z "$tc_script" ]]; then
+                tc_script=$(extract_npm_script "$dir" "type-check")
+            fi
+            if [[ -n "$tc_script" ]]; then
+                cmd_typecheck="$tc_script"
+            else
+                cmd_typecheck="npx tsc --noEmit"
+            fi
+        fi
+
+    # Python
+    elif [[ -f "$dir/pyproject.toml" ]] || [[ -f "$dir/requirements.txt" ]] || [[ -f "$dir/setup.py" ]]; then
+        language="Python"
+
+        if [[ -f "$dir/pyproject.toml" ]]; then
+            if grep -q 'fastapi' "$dir/pyproject.toml" 2>/dev/null; then
+                framework="FastAPI"
+            elif grep -q 'django' "$dir/pyproject.toml" 2>/dev/null; then
+                framework="Django"
+            elif grep -q 'flask' "$dir/pyproject.toml" 2>/dev/null; then
+                framework="Flask"
+            fi
+        fi
+
+        # Common python commands
+        if [[ -f "$dir/pyproject.toml" ]] && grep -q 'pytest' "$dir/pyproject.toml" 2>/dev/null; then
+            cmd_test="pytest"
+        elif [[ -d "$dir/tests" ]]; then
+            cmd_test="pytest"
+        fi
+
+        if command -v ruff &>/dev/null || grep -q 'ruff' "$dir/pyproject.toml" 2>/dev/null; then
+            cmd_lint="ruff check ."
+        elif command -v flake8 &>/dev/null; then
+            cmd_lint="flake8 ."
+        fi
+
+        if grep -q 'mypy' "$dir/pyproject.toml" 2>/dev/null; then
+            cmd_typecheck="mypy ."
+        fi
+
+    # Go
+    elif [[ -f "$dir/go.mod" ]]; then
+        language="Go"
+
+        if grep -q 'gin-gonic' "$dir/go.mod" 2>/dev/null; then
+            framework="Gin"
+        elif grep -q 'labstack/echo' "$dir/go.mod" 2>/dev/null; then
+            framework="Echo"
+        elif grep -q 'gofiber' "$dir/go.mod" 2>/dev/null; then
+            framework="Fiber"
+        fi
+
+        cmd_test="go test ./..."
+        cmd_lint="golangci-lint run"
+        cmd_build="go build ./..."
+
+    # Rust
+    elif [[ -f "$dir/Cargo.toml" ]]; then
+        language="Rust"
+
+        if grep -q 'actix-web' "$dir/Cargo.toml" 2>/dev/null; then
+            framework="Actix"
+        elif grep -q 'axum' "$dir/Cargo.toml" 2>/dev/null; then
+            framework="Axum"
+        elif grep -q 'rocket' "$dir/Cargo.toml" 2>/dev/null; then
+            framework="Rocket"
+        fi
+
+        cmd_test="cargo test"
+        cmd_lint="cargo clippy"
+        cmd_build="cargo build"
+
+    # Java / Kotlin
+    elif [[ -f "$dir/pom.xml" ]]; then
+        language="Java"
+        framework="Maven"
+        cmd_test="mvn test"
+        cmd_build="mvn package"
+    elif [[ -f "$dir/build.gradle" ]] || [[ -f "$dir/build.gradle.kts" ]]; then
+        if [[ -f "$dir/build.gradle.kts" ]]; then
+            language="Kotlin"
+        else
+            language="Java"
+        fi
+        framework="Gradle"
+        cmd_test="./gradlew test"
+        cmd_build="./gradlew build"
+
+    # Bash / Shell
+    elif compgen -G "$dir/bin/*" > /dev/null 2>&1 || compgen -G "$dir/*.sh" > /dev/null 2>&1; then
+        local has_bash=false
+        for f in "$dir"/bin/* "$dir"/*.sh; do
+            [[ -f "$f" ]] && head -1 "$f" 2>/dev/null | grep -q 'bash' && has_bash=true && break
+        done
+        if [[ "$has_bash" == "true" ]]; then
+            language="Bash"
+            if command -v shellcheck &>/dev/null; then
+                # Collect script paths for shellcheck
+                local scripts=""
+                for f in "$dir"/bin/* "$dir"/*.sh; do
+                    [[ -f "$f" ]] && scripts+=" $(basename "$f")"
+                done
+                cmd_lint="shellcheck${scripts}"
+            fi
+        fi
+
+    # Ruby
+    elif [[ -f "$dir/Gemfile" ]]; then
+        language="Ruby"
+        if grep -q 'rails' "$dir/Gemfile" 2>/dev/null; then
+            framework="Rails"
+            cmd_test="bundle exec rails test"
+        else
+            cmd_test="bundle exec rspec"
+        fi
+        cmd_lint="bundle exec rubocop"
+    fi
+
+    # Return results via global vars
+    DETECTED_LANGUAGE="$language"
+    DETECTED_FRAMEWORK="$framework"
+    DETECTED_CMD_TEST="$cmd_test"
+    DETECTED_CMD_LINT="$cmd_lint"
+    DETECTED_CMD_BUILD="$cmd_build"
+    DETECTED_CMD_TYPECHECK="$cmd_typecheck"
+}
+
+# Extract an npm script name, returning the `npm run <name>` command if found
+extract_npm_script() {
+    local dir="$1"
+    local script_name="$2"
+
+    if grep -q "\"${script_name}\"" "$dir/package.json" 2>/dev/null; then
+        # Check if it's in the "scripts" section
+        if python3 -c "
+import json, sys
+with open('$dir/package.json') as f:
+    pkg = json.load(f)
+scripts = pkg.get('scripts', {})
+if '$script_name' in scripts:
+    print('npm run $script_name')
+" 2>/dev/null; then
+            return
+        fi
+        # Fallback: simple grep
+        echo "npm run $script_name"
+    fi
+}
+
+# --- Write config.yaml ---
+write_config() {
+    local dir="$1"
+    local project_name
+    project_name=$(basename "$dir")
+
+    mkdir -p "$dir/$RALPH_CONFIG_DIR"
+
+    {
+        echo "# vaibhav ralph configuration"
+        echo "# Auto-generated — edit as needed"
+        echo ""
+        echo "project:"
+        echo "  name: \"$project_name\""
+        if [[ -n "$DETECTED_LANGUAGE" ]]; then
+            echo "  language: \"$DETECTED_LANGUAGE\""
+        fi
+        if [[ -n "$DETECTED_FRAMEWORK" ]]; then
+            echo "  framework: \"$DETECTED_FRAMEWORK\""
+        fi
+        echo ""
+        echo "commands:"
+        if [[ -n "$DETECTED_CMD_TEST" ]]; then
+            echo "  test: \"$DETECTED_CMD_TEST\""
+        else
+            echo "  # test: \"\""
+        fi
+        if [[ -n "$DETECTED_CMD_LINT" ]]; then
+            echo "  lint: \"$DETECTED_CMD_LINT\""
+        else
+            echo "  # lint: \"\""
+        fi
+        if [[ -n "$DETECTED_CMD_BUILD" ]]; then
+            echo "  build: \"$DETECTED_CMD_BUILD\""
+        else
+            echo "  # build: \"\""
+        fi
+        if [[ -n "$DETECTED_CMD_TYPECHECK" ]]; then
+            echo "  typecheck: \"$DETECTED_CMD_TYPECHECK\""
+        fi
+        echo ""
+        echo "rules: []"
+        echo "  # - \"follow existing patterns\""
+        echo "  # - \"use TypeScript strict mode\""
+        echo ""
+        echo "boundaries:"
+        echo "  never_touch:"
+        echo "    - \"*.lock\""
+        echo "    - \".env*\""
+        echo "    - \"prd.json\""
+        echo "    - \"progress.txt\""
+        echo ""
+        echo "engine: \"amp\"  # amp, claude, opencode"
+        echo "max_retries: 3"
+    } > "$dir/$RALPH_CONFIG_FILE"
+}
+
+# --- Init command ---
+ralph_init() {
+    local dir="${1:-$(pwd)}"
+    dir=$(cd "$dir" 2>/dev/null && pwd)
+
+    echo -e "${BOLD}vaibhav ralph init${NC}"
+    echo -e "${DIM}Scanning ${dir}${NC}"
+    echo ""
+
+    if [[ -f "$dir/$RALPH_CONFIG_FILE" ]]; then
+        echo -e "  ${YELLOW}!${NC} Config already exists at ${CYAN}${RALPH_CONFIG_FILE}${NC}"
+        read -rp "  Overwrite? [y/N] " yn
+        if [[ ! "$yn" =~ ^[Yy]$ ]]; then
+            echo -e "  ${DIM}Aborted${NC}"
+            return
+        fi
+    fi
+
+    # Detect project
+    detect_project "$dir"
+
+    # Show detection results
+    if [[ -n "$DETECTED_LANGUAGE" ]]; then
+        echo -e "  ${GREEN}✓${NC} Language:   ${CYAN}${DETECTED_LANGUAGE}${NC}"
+    else
+        echo -e "  ${YELLOW}?${NC} Language:   ${DIM}not detected${NC}"
+    fi
+
+    if [[ -n "$DETECTED_FRAMEWORK" ]]; then
+        echo -e "  ${GREEN}✓${NC} Framework:  ${CYAN}${DETECTED_FRAMEWORK}${NC}"
+    fi
+
+    if [[ -n "$DETECTED_CMD_TEST" ]]; then
+        echo -e "  ${GREEN}✓${NC} Test:       ${CYAN}${DETECTED_CMD_TEST}${NC}"
+    else
+        echo -e "  ${DIM}  Test:       not detected${NC}"
+    fi
+
+    if [[ -n "$DETECTED_CMD_LINT" ]]; then
+        echo -e "  ${GREEN}✓${NC} Lint:       ${CYAN}${DETECTED_CMD_LINT}${NC}"
+    else
+        echo -e "  ${DIM}  Lint:       not detected${NC}"
+    fi
+
+    if [[ -n "$DETECTED_CMD_BUILD" ]]; then
+        echo -e "  ${GREEN}✓${NC} Build:      ${CYAN}${DETECTED_CMD_BUILD}${NC}"
+    else
+        echo -e "  ${DIM}  Build:      not detected${NC}"
+    fi
+
+    if [[ -n "$DETECTED_CMD_TYPECHECK" ]]; then
+        echo -e "  ${GREEN}✓${NC} Typecheck:  ${CYAN}${DETECTED_CMD_TYPECHECK}${NC}"
+    fi
+
+    echo ""
+
+    # Let user pick engine
+    local engine="amp"
+    echo -e "  ${BOLD}Default AI engine:${NC}"
+    echo -e "    1) amp"
+    echo -e "    2) claude"
+    echo -e "    3) opencode"
+    read -rp "  Choose [1]: " engine_choice
+    case "${engine_choice:-1}" in
+        2) engine="claude" ;;
+        3) engine="opencode" ;;
+        *) engine="amp" ;;
+    esac
+
+    # Write config
+    write_config "$dir"
+
+    # Update engine in config
+    sed -i "s/^engine: .*/engine: \"$engine\"/" "$dir/$RALPH_CONFIG_FILE"
+
+    echo -e "  ${GREEN}✓${NC} Config written to ${CYAN}${dir}/${RALPH_CONFIG_FILE}${NC}"
+    echo ""
+    cat "$dir/$RALPH_CONFIG_FILE"
+    echo ""
+    echo -e "${BOLD}Next steps:${NC}"
+    echo "  vaibhav ralph add-rule \"your rule here\"   Add project-specific rules"
+    echo "  vaibhav ralph config                       Review config"
+    echo "  vaibhav ralph prd create <name>            Write a PRD"
+    echo "  vaibhav ralph run                          Start the ralph loop"
+}
+
+# --- Add rule ---
+ralph_add_rule() {
+    local rule="$1"
+    local dir
+    dir=$(find_config_dir)
+
+    if [[ -z "$dir" ]]; then
+        echo -e "${RED}Error:${NC} No .vaibhav/config.yaml found. Run 'vaibhav ralph init' first."
+        exit 1
+    fi
+
+    local config="$dir/$RALPH_CONFIG_FILE"
+
+    # Replace empty rules array or append to existing
+    if grep -q '^rules: \[\]' "$config"; then
+        sed -i "s/^rules: \[\]/rules:\n  - \"$rule\"/" "$config"
+    else
+        # Find the rules section and append
+        sed -i "/^rules:/a\\  - \"$rule\"" "$config"
+    fi
+
+    echo -e "${GREEN}✓${NC} Added rule: ${CYAN}${rule}${NC}"
+}
+
+# --- Show config ---
+ralph_config() {
+    local dir
+    dir=$(find_config_dir)
+
+    if [[ -z "$dir" ]]; then
+        echo -e "${RED}Error:${NC} No .vaibhav/config.yaml found. Run 'vaibhav ralph init' first."
+        exit 1
+    fi
+
+    echo -e "${BOLD}vaibhav ralph config${NC} ${DIM}(${dir}/${RALPH_CONFIG_FILE})${NC}"
+    echo ""
+    cat "$dir/$RALPH_CONFIG_FILE"
+}
+
+# --- Status ---
+ralph_status() {
+    local dir
+    dir=$(find_config_dir)
+
+    if [[ -z "$dir" ]]; then
+        echo -e "${RED}Error:${NC} No .vaibhav/config.yaml found. Run 'vaibhav ralph init' first."
+        exit 1
+    fi
+
+    local prd="$dir/prd.json"
+    if [[ ! -f "$prd" ]]; then
+        echo -e "${YELLOW}No prd.json found.${NC} Run 'vaibhav ralph prd create <name>' to get started."
+        return
+    fi
+
+    echo -e "${BOLD}Ralph Status${NC}"
+    echo ""
+
+    # Parse prd.json for progress
+    python3 -c "
+import json, sys
+with open('$prd') as f:
+    data = json.load(f)
+project = data.get('project', 'unknown')
+branch = data.get('branchName', '')
+stories = data.get('userStories', [])
+done = sum(1 for s in stories if s.get('passes'))
+total = len(stories)
+print(f'  Project:  $CYAN{project}$NC')
+if branch:
+    print(f'  Branch:   $DIM{branch}$NC')
+print(f'  Progress: {done}/{total} stories complete')
+print()
+for s in stories:
+    sid = s.get('id', '?')
+    title = s.get('title', 'untitled')
+    passed = s.get('passes', False)
+    if passed:
+        print(f'  $GREEN●$NC {sid}  {title}  $GREEN✓$NC')
+    else:
+        print(f'  $DIM○$NC {sid}  {title}')
+" 2>/dev/null || echo -e "  ${RED}Error parsing prd.json${NC}"
+}
+
+# --- Find config dir (walk up from cwd) ---
+find_config_dir() {
+    local dir
+    dir=$(pwd)
+    while [[ "$dir" != "/" ]]; do
+        if [[ -f "$dir/$RALPH_CONFIG_FILE" ]]; then
+            echo "$dir"
+            return
+        fi
+        dir=$(dirname "$dir")
+    done
+    echo ""
+}
+
+# --- Help ---
+ralph_help() {
+    echo -e "${BOLD}vaibhav ralph${NC} — Ralph loop utility for AI-driven development"
+    echo ""
+    echo -e "${BOLD}Usage:${NC}"
+    echo "  vaibhav ralph init [dir]           Auto-detect project and create .vaibhav/config.yaml"
+    echo "  vaibhav ralph config               Show current project config"
+    echo "  vaibhav ralph add-rule \"rule\"       Add a rule to the project config"
+    echo "  vaibhav ralph status               Show PRD progress"
+    echo ""
+    echo -e "${BOLD}Coming soon:${NC}"
+    echo "  vaibhav ralph prd create <name>    Write a PRD with AI assistance"
+    echo "  vaibhav ralph prd convert <file>   Convert markdown PRD to prd.json"
+    echo "  vaibhav ralph run                  Start the ralph loop"
+}
+
+# --- Main dispatch ---
+case "${1:-}" in
+    ""|help|-h|--help)
+        ralph_help
+        ;;
+    init)
+        ralph_init "${2:-}"
+        ;;
+    config)
+        ralph_config
+        ;;
+    add-rule)
+        if [[ $# -lt 2 ]]; then
+            echo -e "${RED}Usage:${NC} vaibhav ralph add-rule \"your rule here\""
+            exit 1
+        fi
+        ralph_add_rule "$2"
+        ;;
+    status)
+        ralph_status
+        ;;
+    *)
+        echo -e "${RED}Unknown command:${NC} $1"
+        echo ""
+        ralph_help
+        exit 1
+        ;;
+esac

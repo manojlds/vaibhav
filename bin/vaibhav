@@ -353,11 +353,13 @@ show_usage() {
     echo "  vaibhav add <name> <path>   Register a new project"
     echo "  vaibhav remove <name>       Unregister a project"
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
+    echo "  vaibhav ralph ...           Ralph loop utility (run 'vaibhav ralph help' for details)"
     echo ""
     echo -e "${BOLD}Examples:${NC}"
     echo "  vaibhav init                First-time setup"
     echo "  vaibhav heimdall amp        Open heimdall project with Amp"
     echo "  vaibhav scan ~/projects     Register all projects under ~/projects"
+    echo "  vaibhav ralph init          Setup ralph config for current project"
     echo ""
     echo -e "${BOLD}Config:${NC} ${CONFIG_FILE}"
 }
@@ -392,6 +394,11 @@ case "${1:-}" in
         ;;
     scan)
         scan_projects "${2:-}"
+        ;;
+    ralph)
+        shift
+        SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+        exec "$SCRIPT_DIR/vaibhav-ralph" "$@"
         ;;
     *)
         open_project "$1" "${2:-}"
