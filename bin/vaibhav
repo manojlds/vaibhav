@@ -441,6 +441,51 @@ update_termux() {
     return 0
 }
 
+update_desktop_remote() {
+    # SSH to the desktop and run git pull in the vaibhav repo
+    echo ""
+    echo -e "${DIM}Updating desktop via SSH...${NC}"
+
+    # Discover the repo path on the desktop via readlink
+    local remote_repo
+    if ! remote_repo=$(ssh "$VAIBHAV_SSH_HOST" 'repo=$(dirname "$(dirname "$(readlink -f "$HOME/bin/vaibhav")")") && echo "$repo"' 2>/dev/null); then
+        echo -e "${YELLOW}Warning:${NC} Could not connect to desktop via SSH — skipping desktop update"
+        return 0
+    fi
+
+    if [[ -z "$remote_repo" ]]; then
+        echo -e "${YELLOW}Warning:${NC} Could not resolve vaibhav repo path on desktop — skipping desktop update"
+        return 0
+    fi
+
+    # Get the old version on the desktop before pulling
+    local desktop_old_version
+    desktop_old_version=$(ssh "$VAIBHAV_SSH_HOST" "grep '^VAIBHAV_VERSION=' '$remote_repo/bin/vaibhav' | cut -d'\"' -f2" 2>/dev/null) || desktop_old_version="unknown"
+
+    # Check for local changes on desktop
+    if ! ssh "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' diff --quiet 2>/dev/null && git -C '$remote_repo' diff --cached --quiet 2>/dev/null" 2>/dev/null; then
+        echo -e "${YELLOW}Warning:${NC} Desktop has local changes — skipping desktop update"
+        return 0
+    fi
+
+    # Run git pull on the desktop
+    local pull_output
+    if ! pull_output=$(ssh "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' pull" 2>&1); then
+        echo -e "${YELLOW}Warning:${NC} Desktop git pull failed — skipping"
+        echo -e "  ${DIM}${pull_output}${NC}"
+        return 0
+    fi
+
+    if echo "$pull_output" | grep -q "Already up to date"; then
+        echo -e "${GREEN}✓${NC} Desktop already up to date (v${desktop_old_version})"
+    else
+        local desktop_new_version
+        desktop_new_version=$(ssh "$VAIBHAV_SSH_HOST" "grep '^VAIBHAV_VERSION=' '$remote_repo/bin/vaibhav' | cut -d'\"' -f2" 2>/dev/null) || desktop_new_version="unknown"
+        echo -e "${GREEN}✓${NC} Desktop updated: v${desktop_old_version} → v${desktop_new_version}"
+    fi
+    return 0
+}
+
 update_desktop() {
     # Resolve repo directory from the symlink at ~/bin/vaibhav
     local vaibhav_bin
@@ -548,6 +593,14 @@ case "${1:-}" in
     update)
         if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
             update_termux
+            # Also update desktop unless --local flag is set
+            skip_desktop=false
+            for arg in "$@"; do
+                [[ "$arg" == "--local" ]] && skip_desktop=true
+            done
+            if [[ "$skip_desktop" == "false" ]]; then
+                update_desktop_remote
+            fi
         else
             update_desktop
         fi
