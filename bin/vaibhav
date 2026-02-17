@@ -54,8 +54,8 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
     set -- "${args[@]+"${args[@]}"}"
 
     case "${1:-}" in
-        init)
-            ;; # init always runs locally
+        init|update)
+            ;; # init and update always run locally
         list|ls|help|-h|--help)
             exec ssh "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             ;;
@@ -340,6 +340,107 @@ open_project() {
     fi
 }
 
+GITHUB_RAW_BASE="https://raw.githubusercontent.com/manojlds/vaibhav/main"
+
+update_termux() {
+    local old_version="$VAIBHAV_VERSION"
+
+    # Create temp directory for downloads
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "$tmp_dir"' EXIT
+
+    # Download checksums first to check remote version
+    echo -e "${DIM}Checking for updates...${NC}"
+    if ! curl -fsSL -H "Cache-Control: no-cache" \
+        "${GITHUB_RAW_BASE}/checksums.sha256" -o "$tmp_dir/checksums.sha256"; then
+        echo -e "${RED}Error:${NC} Failed to download checksums"
+        return 1
+    fi
+
+    # Download the main script to check version before doing full update
+    if ! curl -fsSL -H "Cache-Control: no-cache" \
+        "${GITHUB_RAW_BASE}/bin/vaibhav" -o "$tmp_dir/vaibhav"; then
+        echo -e "${RED}Error:${NC} Failed to download bin/vaibhav"
+        return 1
+    fi
+
+    # Check if already up to date by comparing version and checksums
+    local remote_version
+    remote_version=$(grep '^VAIBHAV_VERSION=' "$tmp_dir/vaibhav" | cut -d'"' -f2)
+    if [[ "$remote_version" == "$old_version" ]]; then
+        # Verify local files match remote checksums
+        local needs_update=false
+        local local_hash remote_hash
+        for check_file in "$HOME/bin/vaibhav" "$HOME/bin/vaibhav-ralph"; do
+            local basename
+            basename="bin/$(basename "$check_file")"
+            if [[ ! -f "$check_file" ]]; then
+                needs_update=true
+                break
+            fi
+            local_hash=$(sha256sum "$check_file" | cut -d' ' -f1)
+            remote_hash=$(grep "  ${basename}$" "$tmp_dir/checksums.sha256" | cut -d' ' -f1)
+            if [[ "$local_hash" != "$remote_hash" ]]; then
+                needs_update=true
+                break
+            fi
+        done
+        if [[ "$needs_update" == "false" ]]; then
+            echo -e "Already up to date (v${old_version})"
+            return 0
+        fi
+    fi
+
+    # Download remaining files
+    if ! curl -fsSL -H "Cache-Control: no-cache" \
+        "${GITHUB_RAW_BASE}/bin/vaibhav-ralph" -o "$tmp_dir/vaibhav-ralph"; then
+        echo -e "${RED}Error:${NC} Failed to download bin/vaibhav-ralph"
+        return 1
+    fi
+
+    # Verify checksums of downloaded files
+    # checksums.sha256 has paths like "bin/vaibhav" — we need to verify against our temp files
+    # Create a directory structure matching the checksum paths
+    mkdir -p "$tmp_dir/verify/bin"
+    cp "$tmp_dir/vaibhav" "$tmp_dir/verify/bin/vaibhav"
+    cp "$tmp_dir/vaibhav-ralph" "$tmp_dir/verify/bin/vaibhav-ralph"
+
+    # We only verify bin/ files; tmux.conf is not installed to ~/bin
+    # Extract just the bin/ entries from checksums and verify
+    local checksum_ok=true
+    while read -r expected_hash filepath; do
+        # Skip non-bin files (e.g., tmux.conf)
+        case "$filepath" in
+            bin/*) ;;
+            *) continue ;;
+        esac
+        local actual_hash
+        actual_hash=$(sha256sum "$tmp_dir/verify/$filepath" | cut -d' ' -f1)
+        if [[ "$expected_hash" != "$actual_hash" ]]; then
+            echo -e "${RED}Error:${NC} Checksum verification failed for $filepath"
+            echo -e "  Expected: ${expected_hash}"
+            echo -e "  Got:      ${actual_hash}"
+            checksum_ok=false
+        fi
+    done < "$tmp_dir/checksums.sha256"
+
+    if [[ "$checksum_ok" != "true" ]]; then
+        echo -e "${RED}Update aborted:${NC} Checksum verification failed. Existing files unchanged."
+        return 1
+    fi
+
+    # Atomic update: move verified files into place
+    cp "$tmp_dir/vaibhav" "$HOME/bin/vaibhav"
+    chmod +x "$HOME/bin/vaibhav"
+    cp "$tmp_dir/vaibhav-ralph" "$HOME/bin/vaibhav-ralph"
+    chmod +x "$HOME/bin/vaibhav-ralph"
+
+    local new_version="$remote_version"
+    echo -e "${GREEN}✓${NC} Updated: v${old_version} → v${new_version}"
+    return 0
+}
+
 update_desktop() {
     # Resolve repo directory from the symlink at ~/bin/vaibhav
     local vaibhav_bin
@@ -445,7 +546,11 @@ case "${1:-}" in
         scan_projects "${2:-}"
         ;;
     update)
-        update_desktop
+        if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
+            update_termux
+        else
+            update_desktop
+        fi
         ;;
     ralph)
         shift
