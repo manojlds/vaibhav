@@ -100,14 +100,42 @@ Check the version with `vaibhav --version`.
 
 On the desktop, `vaibhav` is symlinked to the repo — just `git pull` to update.
 
+## Ralph loop
+
+vaibhav includes a built-in [Ralph loop](RALPH.md) — an autonomous AI coding loop that works through a PRD, implementing stories one by one.
+
+```bash
+vaibhav ralph init                          # Setup project config
+vaibhav ralph prd create auth               # Write a PRD
+vaibhav ralph prd convert tasks/prd-auth.md # Convert to prd.json
+vaibhav ralph run                           # Start the loop
+vaibhav ralph status                        # Check progress
+```
+
+Works from your phone too — use `-p` to target any project:
+
+```bash
+vaibhav ralph -p myapp status
+vaibhav ralph -p myapp run --max-iterations 3
+```
+
+See [RALPH.md](RALPH.md) for the full guide.
+
 ## Project structure
 
 ```
 vaibhav/
-├── bin/vaibhav         # Project session manager script
-├── tmux.conf           # tmux configuration (mobile-optimized)
-├── setup-desktop.sh    # Ubuntu desktop setup
-├── setup-termux.sh     # Android Termux setup
+├── bin/
+│   ├── vaibhav          # Project session manager
+│   └── vaibhav-ralph    # Ralph loop engine
+├── prompts/
+│   ├── ralph-prompt.md  # Loop iteration prompt template
+│   ├── prd-skill.md     # PRD writing skill
+│   └── prd-convert.md   # PRD → prd.json converter
+├── tmux.conf            # tmux configuration (mobile-optimized)
+├── setup-desktop.sh     # Ubuntu desktop setup
+├── setup-termux.sh      # Android Termux setup
+├── RALPH.md             # Ralph loop documentation
 └── README.md
 ```
 
