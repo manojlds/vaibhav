@@ -55,16 +55,16 @@ fi
 
 # --- mosh (optional) ---
 step "Mosh (optional)"
-read -rp "  Install mosh for resilient mobile connections? [y/N] " yn
-if [[ "$yn" =~ ^[Yy]$ ]]; then
-    if command -v mosh-server &>/dev/null; then
-        ok "mosh already installed"
-    else
+if command -v mosh-server &>/dev/null; then
+    ok "mosh already installed"
+else
+    read -rp "  Install mosh for resilient mobile connections? [y/N] " yn
+    if [[ "$yn" =~ ^[Yy]$ ]]; then
         sudo apt-get update -qq && sudo apt-get install -y -qq mosh
         ok "mosh installed"
+    else
+        skip "mosh (can install later with: sudo apt install mosh)"
     fi
-else
-    skip "mosh (can install later with: sudo apt install mosh)"
 fi
 
 # --- vaibhav script ---
@@ -75,22 +75,34 @@ chmod +x "$SCRIPT_DIR/bin/vaibhav"
 ok "~/bin/vaibhav → $SCRIPT_DIR/bin/vaibhav"
 
 # Make sure ~/bin is in PATH
-if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then
-    # Detect shell rc file
-    SHELL_RC="$HOME/.bashrc"
-    if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
-        SHELL_RC="$HOME/.zshrc"
-    fi
-    if ! grep -q 'export PATH="$HOME/bin:$PATH"' "$SHELL_RC" 2>/dev/null; then
-        echo 'export PATH="$HOME/bin:$PATH"' >> "$SHELL_RC"
-        warn "Added ~/bin to PATH in $SHELL_RC (restart shell or: source $SHELL_RC)"
-    fi
+SHELL_RC="$HOME/.bashrc"
+if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
+    SHELL_RC="$HOME/.zshrc"
+fi
+if grep -q 'export PATH="$HOME/bin:$PATH"' "$SHELL_RC" 2>/dev/null; then
+    ok "PATH already configured in $SHELL_RC"
+elif [[ ":$PATH:" == *":$HOME/bin:"* ]]; then
+    ok "~/bin already in PATH"
+else
+    echo 'export PATH="$HOME/bin:$PATH"' >> "$SHELL_RC"
+    warn "Added ~/bin to PATH in $SHELL_RC (restart shell or: source $SHELL_RC)"
 fi
 
 # --- Configure vaibhav ---
 step "Configuring vaibhav"
 export PATH="$HOME/bin:$PATH"
-vaibhav init
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav/config"
+if [[ -f "$CONFIG_FILE" ]]; then
+    ok "vaibhav already configured ($CONFIG_FILE)"
+    read -rp "  Re-configure? [y/N] " yn
+    if [[ "$yn" =~ ^[Yy]$ ]]; then
+        vaibhav init
+    else
+        skip "re-configuration"
+    fi
+else
+    vaibhav init
+fi
 
 # --- Tailscale ---
 step "Checking Tailscale"
