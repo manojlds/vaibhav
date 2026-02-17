@@ -20,7 +20,7 @@ PRD → prd.json → Ralph Loop → Done
 ```bash
 cd ~/projects/myapp
 vaibhav ralph init                          # 1. Setup config
-vaibhav ralph prd create auth               # 2. Write a PRD
+vaibhav ralph prd create auth "Add user auth with email/password login"  # 2. Write a PRD
 vaibhav ralph prd convert tasks/prd-auth.md # 3. Convert to prd.json
 vaibhav ralph run                           # 4. Start the loop
 ```
@@ -105,18 +105,20 @@ Launches your AI engine with a PRD-writing skill. The AI asks clarifying questio
 **Desktop:**
 
 ```bash
-vaibhav ralph prd create auth
+vaibhav ralph prd create auth "Add user authentication with email/password login and session management"
 ```
 
 **Phone:**
 
 ```bash
-vaibhav ralph -p myapp prd create auth
+vaibhav ralph -p myapp prd create auth "Add user auth with email/password login"
 ```
+
+The description is optional but recommended — it gives the AI the context it needs to ask better clarifying questions and generate a more accurate PRD. Without it, you just get generic questions about the feature name.
 
 **What happens:**
 
-1. AI asks 3–5 clarifying questions (with lettered options for quick answers)
+1. AI reads your description and asks 3–5 targeted clarifying questions (with lettered options)
 2. You answer (e.g., "1A, 2C, 3B")
 3. AI generates `tasks/prd-auth.md` with:
    - Introduction and goals
@@ -346,7 +348,7 @@ All commands support `-p <project>` to target a registered project from anywhere
 
 | Command | Description |
 |---------|-------------|
-| `vaibhav ralph prd create <name>` | Write a PRD with AI assistance |
+| `vaibhav ralph prd create <name> ["desc"]` | Write a PRD with AI assistance |
 | `vaibhav ralph prd convert <file>` | Convert markdown PRD → prd.json |
 | `vaibhav ralph prd list` | List all PRDs and progress |
 
@@ -365,7 +367,7 @@ All commands support `-p <project>` to target a registered project from anywhere
 
 ```bash
 vaibhav ralph -p heimdall init
-vaibhav ralph -p heimdall prd create auth
+vaibhav ralph -p heimdall prd create auth "Add login and session management"
 vaibhav ralph -p heimdall run --max-iterations 5
 vaibhav ralph -p heimdall status
 vaibhav ralph -p heimdall config

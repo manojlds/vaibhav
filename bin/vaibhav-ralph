@@ -656,7 +656,7 @@ ralph_prd() {
         ""|help|-h)
             echo -e "${BOLD}vaibhav ralph prd${NC} — PRD authoring"
             echo ""
-            echo "  vaibhav ralph prd create <name>    Write a PRD with AI assistance"
+            echo "  vaibhav ralph prd create <name> [\"desc\"]  Write a PRD with AI assistance"
             echo "  vaibhav ralph prd convert <file>   Convert markdown PRD to prd.json"
             echo "  vaibhav ralph prd list             List all PRDs"
             ;;
@@ -670,9 +670,10 @@ ralph_prd() {
 ralph_prd_create() {
     local name="${1:-}"
     if [[ -z "$name" ]]; then
-        echo -e "${RED}Usage:${NC} vaibhav ralph prd create <feature-name>"
+        echo -e "${RED}Usage:${NC} vaibhav ralph prd create <feature-name> [\"description of what to build\"]"
         exit 1
     fi
+    local description="${2:-}"
 
     local dir
     dir=$(find_config_dir)
@@ -701,11 +702,19 @@ ralph_prd_create() {
     local skill_content
     skill_content=$(cat "$skill_file")
 
+    local feature_section="## Feature to write PRD for: ${name}"
+    if [[ -n "$description" ]]; then
+        feature_section+="
+
+### Description
+${description}"
+    fi
+
     local prompt="$skill_content
 
 ---
 
-## Feature to write PRD for: ${name}
+${feature_section}
 
 Create a PRD for this feature. Save it to tasks/prd-${name}.md
 
@@ -713,6 +722,7 @@ Ask me clarifying questions first before writing the PRD."
 
     echo -e "${BOLD}vaibhav ralph prd create${NC}"
     echo -e "  Feature:  ${CYAN}${name}${NC}"
+    [[ -n "$description" ]] && echo -e "  Desc:     ${CYAN}${description}${NC}"
     echo -e "  Engine:   ${CYAN}${engine}${NC}"
     echo -e "  Output:   ${CYAN}tasks/prd-${name}.md${NC}"
     echo ""
@@ -1102,7 +1112,7 @@ ralph_help() {
     echo "  vaibhav ralph add-rule \"rule\"       Add a rule to the project config"
     echo ""
     echo -e "${BOLD}PRD:${NC}"
-    echo "  vaibhav ralph prd create <name>    Write a PRD with AI assistance"
+    echo "  vaibhav ralph prd create <name> [\"desc\"]  Write a PRD with AI assistance"
     echo "  vaibhav ralph prd convert <file>   Convert markdown PRD to prd.json"
     echo "  vaibhav ralph prd list             List all PRDs and progress"
     echo ""
@@ -1119,7 +1129,7 @@ ralph_help() {
     echo ""
     echo -e "${BOLD}Workflow:${NC}"
     echo "  1. vaibhav ralph init              Setup project config"
-    echo "  2. vaibhav ralph prd create auth   Write a PRD for a feature"
+    echo "  2. vaibhav ralph prd create auth \"Add login with email/password\"  Write a PRD"
     echo "  3. vaibhav ralph prd convert tasks/prd-auth.md"
     echo "  4. vaibhav ralph run               Start the loop"
     echo ""
