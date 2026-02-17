@@ -308,8 +308,6 @@ write_config() {
         echo "  never_touch:"
         echo "    - \"*.lock\""
         echo "    - \".env*\""
-        echo "    - \"prd.json\""
-        echo "    - \"progress.txt\""
         echo ""
         echo "engine: \"amp\"  # amp, claude, opencode"
         echo "max_retries: 3"
@@ -1134,10 +1132,6 @@ ralph_help() {
 case "${1:-}" in
     ""|help|-h|--help)
         ralph_help
-        ;;
-    version|-v|--version)
-        SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-        exec "$SCRIPT_DIR/vaibhav" --version
         ;;
     init)
         ralph_init "${2:-}"

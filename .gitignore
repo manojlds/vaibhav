@@ -1,0 +1,7 @@
+# Ralph loop working files (local state, not repo content)
+prd.json
+progress.txt
+.vaibhav/.last-branch
+
+# Ralph loop artifacts
+shellcheck-*/
