@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.2.0"
+VAIBHAV_VERSION="0.3.0"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -370,7 +370,7 @@ case "${1:-}" in
         show_usage
         ;;
     version|-v|--version)
-        echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
+        echo "vaibhav $VAIBHAV_VERSION"
         ;;
     init)
         init_config

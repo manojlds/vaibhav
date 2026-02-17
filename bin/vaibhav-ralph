@@ -1135,6 +1135,10 @@ case "${1:-}" in
     ""|help|-h|--help)
         ralph_help
         ;;
+    version|-v|--version)
+        SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+        exec "$SCRIPT_DIR/vaibhav" --version
+        ;;
     init)
         ralph_init "${2:-}"
         ;;
