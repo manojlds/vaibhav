@@ -21,6 +21,44 @@ NC='\033[0m'
 RALPH_CONFIG_DIR=".vaibhav"
 RALPH_CONFIG_FILE="$RALPH_CONFIG_DIR/config.yaml"
 
+VAIBHAV_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
+VAIBHAV_PROJECTS_FILE="$VAIBHAV_CONFIG_DIR/projects"
+
+# --- Resolve --project / -p flag ---
+# Allows running ralph commands from anywhere (e.g., phone) by specifying a project name
+resolve_project_flag() {
+    local args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--project)
+                local project_name="$2"
+                shift 2
+                local project_path
+                project_path=$(grep "^${project_name}=" "$VAIBHAV_PROJECTS_FILE" 2>/dev/null | cut -d= -f2- || true)
+                if [[ -z "$project_path" ]]; then
+                    echo -e "${RED}Error:${NC} Project '${project_name}' not found in registry" >&2
+                    echo -e "${DIM}Run 'vaibhav list' to see registered projects${NC}" >&2
+                    exit 1
+                fi
+                if [[ ! -d "$project_path" ]]; then
+                    echo -e "${RED}Error:${NC} Project directory does not exist: $project_path" >&2
+                    exit 1
+                fi
+                cd "$project_path"
+                ;;
+            *)
+                args+=("$1")
+                shift
+                ;;
+        esac
+    done
+    # Return remaining args
+    RALPH_ARGS=("${args[@]+"${args[@]}"}")
+}
+
+resolve_project_flag "$@"
+set -- "${RALPH_ARGS[@]+"${RALPH_ARGS[@]}"}"
+
 # --- Detect project language and framework ---
 detect_project() {
     local dir="$1"
@@ -1029,11 +1067,18 @@ ralph_help() {
     echo "  vaibhav ralph run --max-iterations 5"
     echo "  vaibhav ralph status               Show PRD progress"
     echo ""
+    echo -e "${BOLD}Options:${NC}"
+    echo "  -p, --project <name>         Target a registered project (for remote use)"
+    echo ""
     echo -e "${BOLD}Workflow:${NC}"
     echo "  1. vaibhav ralph init              Setup project config"
     echo "  2. vaibhav ralph prd create auth   Write a PRD for a feature"
     echo "  3. vaibhav ralph prd convert tasks/prd-auth.md"
     echo "  4. vaibhav ralph run               Start the loop"
+    echo ""
+    echo -e "${BOLD}From phone:${NC}"
+    echo "  vaibhav ralph -p heimdall status"
+    echo "  vaibhav ralph -p heimdall run --max-iterations 3"
 }
 
 # --- Main dispatch ---
