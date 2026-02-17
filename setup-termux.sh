@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Setup script for Termux (Android) side
 # Run this INSIDE Termux on your Android phone
+# Idempotent — safe to re-run for repairs or upgrades
 set -euo pipefail
 
 GREEN='\033[0;32m'
@@ -18,38 +19,64 @@ warn() { echo -e "  ${YELLOW}!${NC} $1"; }
 echo -e "${BOLD}vaibhav — Termux Setup${NC}"
 echo ""
 
-# --- Collect desktop info ---
-if [[ -z "${1:-}" ]]; then
-    read -rp "Desktop hostname or IP: " DESKTOP_HOST
-else
-    DESKTOP_HOST="$1"
+# --- Load existing config for defaults ---
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
+CONFIG_FILE="$CONFIG_DIR/config"
+EXISTING_HOST=""
+EXISTING_USER=""
+if [[ -f "$CONFIG_FILE" ]]; then
+    EXISTING_HOST=$(grep '^VAIBHAV_DESKTOP_HOST=' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2) || true
+    EXISTING_USER=$(grep '^VAIBHAV_SSH_HOST=' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2) || true
+    # Try to extract username from SSH config if available
+    if [[ -f ~/.ssh/config ]]; then
+        EXISTING_USER=$(awk '/^# vaibhav/,/^$/{if(/User /){print $2}}' ~/.ssh/config 2>/dev/null) || true
+    fi
 fi
 
-if [[ -z "${2:-}" ]]; then
-    read -rp "Desktop username: " DESKTOP_USER
+# --- Collect desktop info ---
+# Use positional args, then existing config defaults, then prompt
+if [[ -n "${1:-}" ]]; then
+    DESKTOP_HOST="$1"
+elif [[ -n "$EXISTING_HOST" ]]; then
+    read -rp "Desktop hostname or IP [$EXISTING_HOST]: " input_host
+    DESKTOP_HOST="${input_host:-$EXISTING_HOST}"
 else
+    read -rp "Desktop hostname or IP: " DESKTOP_HOST
+fi
+
+# Extract existing SSH user from SSH config for default
+if [[ -n "${2:-}" ]]; then
     DESKTOP_USER="$2"
+elif [[ -n "$EXISTING_USER" ]]; then
+    read -rp "Desktop username [$EXISTING_USER]: " input_user
+    DESKTOP_USER="${input_user:-$EXISTING_USER}"
+else
+    read -rp "Desktop username: " DESKTOP_USER
 fi
 echo ""
 
 # --- Install packages ---
 step "Installing packages"
-pkg update -y
-pkg install -y openssh
-ok "openssh installed"
+if dpkg -s openssh &>/dev/null 2>&1 || command -v ssh &>/dev/null; then
+    ok "openssh already installed"
+else
+    pkg update -y
+    pkg install -y openssh
+    ok "openssh installed"
+fi
 
 # --- mosh (optional) ---
 step "Mosh (optional)"
-read -rp "  Install mosh for resilient mobile connections? [y/N] " yn
-if [[ "$yn" =~ ^[Yy]$ ]]; then
-    if command -v mosh &>/dev/null; then
-        ok "mosh already installed"
-    else
+if command -v mosh &>/dev/null; then
+    ok "mosh already installed"
+else
+    read -rp "  Install mosh for resilient mobile connections? [y/N] " yn
+    if [[ "$yn" =~ ^[Yy]$ ]]; then
         pkg install -y mosh
         ok "mosh installed"
+    else
+        ok "mosh skipped (can install later with: pkg install mosh)"
     fi
-else
-    skip "mosh (can install later with: pkg install mosh)"
 fi
 
 # --- SSH key ---
@@ -64,20 +91,37 @@ fi
 
 # --- SSH config ---
 step "Configuring SSH"
-if grep -q "# vaibhav — Desktop connection" ~/.ssh/config 2>/dev/null; then
-    ok "SSH config already configured"
-else
-    cat >> ~/.ssh/config << EOF
-
-# vaibhav — Desktop connection
+SSH_BLOCK="# vaibhav — Desktop connection
 Host desktop
     HostName ${DESKTOP_HOST}
     User ${DESKTOP_USER}
     IdentityFile ~/.ssh/id_ed25519
     ServerAliveInterval 30
     ServerAliveCountMax 5
-    Compression yes
-EOF
+    Compression yes"
+
+if grep -q "# vaibhav — Desktop connection" ~/.ssh/config 2>/dev/null; then
+    # Extract existing block and compare
+    existing_block=$(awk '/^# vaibhav — Desktop connection/,/^$/' ~/.ssh/config | sed '/^$/d')
+    if [[ "$existing_block" == "$SSH_BLOCK" ]]; then
+        ok "SSH config already configured"
+    else
+        # Replace existing block: remove old, append new
+        # Use awk to remove the vaibhav block (from marker to next blank line or EOF)
+        awk '
+            /^# vaibhav — Desktop connection/ { skip=1; next }
+            skip && /^$/ { skip=0; next }
+            skip && /^[^ \t]/ && !/^#/ { skip=0 }
+            !skip { print }
+        ' ~/.ssh/config > ~/.ssh/config.tmp
+        mv ~/.ssh/config.tmp ~/.ssh/config
+        chmod 600 ~/.ssh/config
+        printf '\n%s\n' "$SSH_BLOCK" >> ~/.ssh/config
+        ok "SSH config updated"
+    fi
+else
+    printf '\n%s\n' "$SSH_BLOCK" >> ~/.ssh/config
+    chmod 600 ~/.ssh/config
     ok "SSH config added (Host: desktop)"
 fi
 
@@ -112,9 +156,8 @@ ok "~/bin/vaibhav installed"
 
 # --- Configure vaibhav for remote mode ---
 step "Configuring vaibhav"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 mkdir -p "$CONFIG_DIR"
-cat > "$CONFIG_DIR/config" << EOF
+cat > "$CONFIG_FILE" << EOF
 # vaibhav configuration (remote mode)
 VAIBHAV_DESKTOP_HOST="${DESKTOP_HOST}"
 VAIBHAV_SSH_HOST="desktop"
@@ -128,15 +171,25 @@ if [[ -f "$HOME/.zshrc" ]]; then
     SHELL_RC="$HOME/.zshrc"
 fi
 
-if ! grep -q "# vaibhav" "$SHELL_RC" 2>/dev/null; then
+if grep -q '# vaibhav' "$SHELL_RC" 2>/dev/null; then
+    # Check if PATH line is already there
+    if grep -q 'PATH=.*\$HOME/bin' "$SHELL_RC" 2>/dev/null; then
+        ok "PATH already configured in $SHELL_RC"
+    else
+        cat >> "$SHELL_RC" << 'ALIASES'
+
+# vaibhav
+export PATH="$HOME/bin:$PATH"
+ALIASES
+        ok "PATH configured in $SHELL_RC"
+    fi
+else
     cat >> "$SHELL_RC" << 'ALIASES'
 
 # vaibhav
 export PATH="$HOME/bin:$PATH"
 ALIASES
     ok "PATH configured in $SHELL_RC"
-else
-    ok "Already configured"
 fi
 
 # --- Termux extra keys ---
@@ -151,7 +204,9 @@ extra-keys = [ \
 PROPS
     ok "Extra keyboard row configured"
     warn "Run 'termux-reload-settings' to apply"
-elif ! grep -q "extra-keys" ~/.termux/termux.properties 2>/dev/null; then
+elif grep -q "extra-keys" ~/.termux/termux.properties 2>/dev/null; then
+    ok "Extra keys already configured"
+else
     echo '' >> ~/.termux/termux.properties
     cat >> ~/.termux/termux.properties << 'PROPS'
 # Extra keys row for tmux and coding
@@ -161,8 +216,6 @@ extra-keys = [ \
 PROPS
     ok "Extra keyboard row added"
     warn "Run 'termux-reload-settings' to apply"
-else
-    ok "Extra keys already configured"
 fi
 
 # --- Font ---
@@ -176,7 +229,7 @@ else
         ok "FiraCode Nerd Font installed"
         termux-reload-settings 2>/dev/null || true
     else
-        ok "Skipped"
+        ok "Font skipped"
     fi
 fi
 
