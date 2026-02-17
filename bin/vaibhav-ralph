@@ -462,20 +462,578 @@ find_config_dir() {
     echo ""
 }
 
+# --- Read config values ---
+read_config_value() {
+    local config="$1"
+    local key="$2"
+    python3 -c "
+import yaml, sys
+with open('$config') as f:
+    data = yaml.safe_load(f)
+keys = '$key'.split('.')
+val = data
+for k in keys:
+    if val is None:
+        break
+    val = val.get(k)
+if val is not None:
+    if isinstance(val, list):
+        for item in val:
+            print(item)
+    else:
+        print(val)
+" 2>/dev/null
+}
+
+# --- Resolve prompts dir ---
+get_prompts_dir() {
+    local script_path
+    script_path="$(readlink -f "$0")"
+    echo "$(dirname "$(dirname "$script_path")")/prompts"
+}
+
+# --- Build ralph prompt from template + config ---
+build_prompt() {
+    local dir="$1"
+    local config="$dir/$RALPH_CONFIG_FILE"
+    local prompts_dir
+    prompts_dir=$(get_prompts_dir)
+    local template="$prompts_dir/ralph-prompt.md"
+
+    if [[ ! -f "$template" ]]; then
+        echo -e "${RED}Error:${NC} Prompt template not found at $template"
+        exit 1
+    fi
+
+    local prompt
+    prompt=$(cat "$template")
+
+    # Build project context
+    local project_name language framework
+    project_name=$(read_config_value "$config" "project.name")
+    language=$(read_config_value "$config" "project.language")
+    framework=$(read_config_value "$config" "project.framework")
+
+    local context="Project: ${project_name}"
+    [[ -n "$language" ]] && context+="\nLanguage: ${language}"
+    [[ -n "$framework" ]] && context+="\nFramework: ${framework}"
+
+    # Build rules
+    local rules=""
+    while IFS= read -r rule; do
+        [[ -n "$rule" ]] && rules+="- ${rule}\n"
+    done < <(read_config_value "$config" "rules")
+    rules="${rules:-No project-specific rules defined.}"
+
+    # Build boundaries
+    local boundaries=""
+    while IFS= read -r boundary; do
+        [[ -n "$boundary" ]] && boundaries+="- ${boundary}\n"
+    done < <(read_config_value "$config" "boundaries.never_touch")
+
+    # Build commands
+    local commands=""
+    local cmd_test cmd_lint cmd_build cmd_typecheck
+    cmd_test=$(read_config_value "$config" "commands.test")
+    cmd_lint=$(read_config_value "$config" "commands.lint")
+    cmd_build=$(read_config_value "$config" "commands.build")
+    cmd_typecheck=$(read_config_value "$config" "commands.typecheck")
+    [[ -n "$cmd_test" ]] && commands+="   - Test: \`${cmd_test}\`\n"
+    [[ -n "$cmd_lint" ]] && commands+="   - Lint: \`${cmd_lint}\`\n"
+    [[ -n "$cmd_build" ]] && commands+="   - Build: \`${cmd_build}\`\n"
+    [[ -n "$cmd_typecheck" ]] && commands+="   - Typecheck: \`${cmd_typecheck}\`\n"
+    commands="${commands:-   - Run whatever quality checks the project uses\n}"
+
+    # Replace placeholders
+    prompt="${prompt//\{\{PROJECT_CONTEXT\}\}/$context}"
+    prompt="${prompt//\{\{RULES\}\}/$rules}"
+    prompt="${prompt//\{\{BOUNDARIES\}\}/$boundaries}"
+    prompt="${prompt//\{\{COMMANDS\}\}/$commands}"
+
+    echo -e "$prompt"
+}
+
+# --- PRD commands ---
+ralph_prd() {
+    local subcmd="${1:-}"
+    shift || true
+
+    case "$subcmd" in
+        create)
+            ralph_prd_create "$@"
+            ;;
+        convert)
+            ralph_prd_convert "$@"
+            ;;
+        list|ls)
+            ralph_prd_list
+            ;;
+        ""|help|-h)
+            echo -e "${BOLD}vaibhav ralph prd${NC} — PRD authoring"
+            echo ""
+            echo "  vaibhav ralph prd create <name>    Write a PRD with AI assistance"
+            echo "  vaibhav ralph prd convert <file>   Convert markdown PRD to prd.json"
+            echo "  vaibhav ralph prd list             List all PRDs"
+            ;;
+        *)
+            echo -e "${RED}Unknown prd command:${NC} $subcmd"
+            exit 1
+            ;;
+    esac
+}
+
+ralph_prd_create() {
+    local name="${1:-}"
+    if [[ -z "$name" ]]; then
+        echo -e "${RED}Usage:${NC} vaibhav ralph prd create <feature-name>"
+        exit 1
+    fi
+
+    local dir
+    dir=$(find_config_dir)
+    if [[ -z "$dir" ]]; then
+        echo -e "${RED}Error:${NC} No .vaibhav/config.yaml found. Run 'vaibhav ralph init' first."
+        exit 1
+    fi
+
+    local config="$dir/$RALPH_CONFIG_FILE"
+    local engine
+    engine=$(read_config_value "$config" "engine")
+    engine="${engine:-amp}"
+
+    local prompts_dir
+    prompts_dir=$(get_prompts_dir)
+    local skill_file="$prompts_dir/prd-skill.md"
+
+    if [[ ! -f "$skill_file" ]]; then
+        echo -e "${RED}Error:${NC} PRD skill not found at $skill_file"
+        exit 1
+    fi
+
+    # Create tasks dir
+    mkdir -p "$dir/tasks"
+
+    local skill_content
+    skill_content=$(cat "$skill_file")
+
+    local prompt="$skill_content
+
+---
+
+## Feature to write PRD for: ${name}
+
+Create a PRD for this feature. Save it to tasks/prd-${name}.md
+
+Ask me clarifying questions first before writing the PRD."
+
+    echo -e "${BOLD}vaibhav ralph prd create${NC}"
+    echo -e "  Feature:  ${CYAN}${name}${NC}"
+    echo -e "  Engine:   ${CYAN}${engine}${NC}"
+    echo -e "  Output:   ${CYAN}tasks/prd-${name}.md${NC}"
+    echo ""
+
+    case "$engine" in
+        amp)
+            echo "$prompt" | amp --dangerously-allow-all 2>&1
+            ;;
+        claude)
+            echo "$prompt" | claude --dangerously-skip-permissions --print 2>&1
+            ;;
+        opencode)
+            echo "$prompt" | opencode 2>&1
+            ;;
+        *)
+            echo -e "${RED}Error:${NC} Unknown engine '$engine'"
+            exit 1
+            ;;
+    esac
+
+    if [[ -f "$dir/tasks/prd-${name}.md" ]]; then
+        echo ""
+        echo -e "${GREEN}✓${NC} PRD saved to ${CYAN}tasks/prd-${name}.md${NC}"
+        echo -e "  Next: ${DIM}vaibhav ralph prd convert tasks/prd-${name}.md${NC}"
+    fi
+}
+
+ralph_prd_convert() {
+    local file="${1:-}"
+    if [[ -z "$file" ]]; then
+        echo -e "${RED}Usage:${NC} vaibhav ralph prd convert <prd-file.md>"
+        exit 1
+    fi
+
+    local dir
+    dir=$(find_config_dir)
+    if [[ -z "$dir" ]]; then
+        echo -e "${RED}Error:${NC} No .vaibhav/config.yaml found. Run 'vaibhav ralph init' first."
+        exit 1
+    fi
+
+    # Resolve relative path from project root
+    if [[ ! "$file" = /* ]]; then
+        file="$dir/$file"
+    fi
+
+    if [[ ! -f "$file" ]]; then
+        echo -e "${RED}Error:${NC} File not found: $file"
+        exit 1
+    fi
+
+    local config="$dir/$RALPH_CONFIG_FILE"
+    local engine
+    engine=$(read_config_value "$config" "engine")
+    engine="${engine:-amp}"
+
+    local prompts_dir
+    prompts_dir=$(get_prompts_dir)
+    local convert_file="$prompts_dir/prd-convert.md"
+
+    if [[ ! -f "$convert_file" ]]; then
+        echo -e "${RED}Error:${NC} Convert prompt not found at $convert_file"
+        exit 1
+    fi
+
+    local prd_content
+    prd_content=$(cat "$file")
+
+    local convert_prompt
+    convert_prompt=$(cat "$convert_file")
+
+    local prompt="$convert_prompt
+
+---
+
+## PRD to convert:
+
+$prd_content
+
+---
+
+Write the output to prd.json in the project root."
+
+    echo -e "${BOLD}vaibhav ralph prd convert${NC}"
+    echo -e "  Input:   ${CYAN}${file}${NC}"
+    echo -e "  Engine:  ${CYAN}${engine}${NC}"
+    echo -e "  Output:  ${CYAN}prd.json${NC}"
+    echo ""
+
+    case "$engine" in
+        amp)
+            echo "$prompt" | amp --dangerously-allow-all 2>&1
+            ;;
+        claude)
+            echo "$prompt" | claude --dangerously-skip-permissions --print 2>&1
+            ;;
+        opencode)
+            echo "$prompt" | opencode 2>&1
+            ;;
+        *)
+            echo -e "${RED}Error:${NC} Unknown engine '$engine'"
+            exit 1
+            ;;
+    esac
+
+    if [[ -f "$dir/prd.json" ]]; then
+        echo ""
+        echo -e "${GREEN}✓${NC} prd.json created"
+        echo -e "  Next: ${DIM}vaibhav ralph run${NC}"
+    fi
+}
+
+ralph_prd_list() {
+    local dir
+    dir=$(find_config_dir)
+    if [[ -z "$dir" ]]; then
+        echo -e "${RED}Error:${NC} No .vaibhav/config.yaml found. Run 'vaibhav ralph init' first."
+        exit 1
+    fi
+
+    echo -e "${BOLD}PRDs${NC}"
+    echo ""
+
+    if [[ ! -d "$dir/tasks" ]] || ! ls "$dir"/tasks/prd-*.md &>/dev/null; then
+        echo -e "  ${DIM}No PRDs found. Run 'vaibhav ralph prd create <name>'${NC}"
+        return
+    fi
+
+    for prd_file in "$dir"/tasks/prd-*.md; do
+        local name
+        name=$(basename "$prd_file" .md | sed 's/^prd-//')
+        local stories
+        stories=$(grep -c '### US-' "$prd_file" 2>/dev/null || echo "0")
+        echo -e "  ${CYAN}${name}${NC} ${DIM}(${stories} stories)${NC} → ${DIM}${prd_file}${NC}"
+    done
+
+    echo ""
+
+    # Show prd.json status if exists
+    if [[ -f "$dir/prd.json" ]]; then
+        local done total
+        done=$(python3 -c "
+import json
+with open('$dir/prd.json') as f:
+    data = json.load(f)
+stories = data.get('userStories', [])
+print(sum(1 for s in stories if s.get('passes')))
+" 2>/dev/null || echo "?")
+        total=$(python3 -c "
+import json
+with open('$dir/prd.json') as f:
+    data = json.load(f)
+print(len(data.get('userStories', [])))
+" 2>/dev/null || echo "?")
+        echo -e "  ${BOLD}Active prd.json:${NC} ${done}/${total} stories complete"
+    fi
+}
+
+# --- Run command (the ralph loop) ---
+ralph_run() {
+    local dir
+    dir=$(find_config_dir)
+    if [[ -z "$dir" ]]; then
+        echo -e "${RED}Error:${NC} No .vaibhav/config.yaml found. Run 'vaibhav ralph init' first."
+        exit 1
+    fi
+
+    local config="$dir/$RALPH_CONFIG_FILE"
+    local engine max_iterations single_task dry_run
+    engine=$(read_config_value "$config" "engine")
+    engine="${engine:-amp}"
+    max_iterations=10
+    single_task=""
+    dry_run=false
+
+    # Parse args
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --engine)
+                engine="$2"
+                shift 2
+                ;;
+            --max-iterations)
+                max_iterations="$2"
+                shift 2
+                ;;
+            --dry-run)
+                dry_run=true
+                shift
+                ;;
+            *)
+                # Treat as single task description
+                single_task="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # Single task mode (no PRD needed)
+    if [[ -n "$single_task" ]]; then
+        ralph_run_single "$dir" "$engine" "$single_task"
+        return
+    fi
+
+    # PRD loop mode
+    local prd="$dir/prd.json"
+    if [[ ! -f "$prd" ]]; then
+        echo -e "${RED}Error:${NC} No prd.json found."
+        echo -e "  Create one with: ${CYAN}vaibhav ralph prd create <name>${NC}"
+        echo -e "  Then convert:    ${CYAN}vaibhav ralph prd convert tasks/prd-<name>.md${NC}"
+        exit 1
+    fi
+
+    local progress="$dir/progress.txt"
+    local archive_dir="$dir/archive"
+    local last_branch_file="$dir/.vaibhav/.last-branch"
+
+    # Archive previous run if branch changed
+    if [[ -f "$last_branch_file" ]]; then
+        local current_branch last_branch
+        current_branch=$(python3 -c "import json; print(json.load(open('$prd')).get('branchName',''))" 2>/dev/null || echo "")
+        last_branch=$(cat "$last_branch_file" 2>/dev/null || echo "")
+
+        if [[ -n "$current_branch" && -n "$last_branch" && "$current_branch" != "$last_branch" ]]; then
+            local date_str folder_name archive_folder
+            date_str=$(date +%Y-%m-%d)
+            folder_name=$(echo "$last_branch" | sed 's|^ralph/||')
+            archive_folder="$archive_dir/$date_str-$folder_name"
+
+            echo -e "  ${DIM}Archiving previous run: ${last_branch}${NC}"
+            mkdir -p "$archive_folder"
+            [[ -f "$prd" ]] && cp "$prd" "$archive_folder/"
+            [[ -f "$progress" ]] && cp "$progress" "$archive_folder/"
+
+            echo "# Ralph Progress Log" > "$progress"
+            echo "Started: $(date)" >> "$progress"
+            echo "---" >> "$progress"
+        fi
+    fi
+
+    # Track current branch
+    local current_branch
+    current_branch=$(python3 -c "import json; print(json.load(open('$prd')).get('branchName',''))" 2>/dev/null || echo "")
+    if [[ -n "$current_branch" ]]; then
+        mkdir -p "$(dirname "$last_branch_file")"
+        echo "$current_branch" > "$last_branch_file"
+    fi
+
+    # Initialize progress file
+    if [[ ! -f "$progress" ]]; then
+        echo "# Ralph Progress Log" > "$progress"
+        echo "Started: $(date)" >> "$progress"
+        echo "---" >> "$progress"
+    fi
+
+    # Build the prompt
+    local prompt
+    prompt=$(build_prompt "$dir")
+
+    if [[ "$dry_run" == "true" ]]; then
+        echo -e "${BOLD}vaibhav ralph run ${DIM}(dry run)${NC}"
+        echo -e "  Project:     ${CYAN}$(read_config_value "$config" "project.name")${NC}"
+        echo -e "  Engine:      ${CYAN}${engine}${NC}"
+        echo -e "  Iterations:  ${CYAN}${max_iterations}${NC}"
+        echo -e "  PRD:         ${CYAN}${prd}${NC}"
+        echo ""
+        echo -e "${BOLD}Prompt that would be sent:${NC}"
+        echo "---"
+        echo "$prompt"
+        echo "---"
+        return
+    fi
+
+    echo -e "${BOLD}vaibhav ralph run${NC}"
+    echo -e "  Project:     ${CYAN}$(read_config_value "$config" "project.name")${NC}"
+    echo -e "  Engine:      ${CYAN}${engine}${NC}"
+    echo -e "  Iterations:  ${CYAN}max ${max_iterations}${NC}"
+    echo ""
+
+    for i in $(seq 1 "$max_iterations"); do
+        echo ""
+        echo "==============================================================="
+        echo "  Ralph Iteration $i of $max_iterations ($engine)"
+        echo "==============================================================="
+
+        local output=""
+        case "$engine" in
+            amp)
+                output=$(echo "$prompt" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
+                ;;
+            claude)
+                output=$(echo "$prompt" | claude --dangerously-skip-permissions --print 2>&1 | tee /dev/stderr) || true
+                ;;
+            opencode)
+                output=$(echo "$prompt" | opencode 2>&1 | tee /dev/stderr) || true
+                ;;
+            *)
+                echo -e "${RED}Error:${NC} Unknown engine '$engine'"
+                exit 1
+                ;;
+        esac
+
+        # Check for completion signal
+        if echo "$output" | grep -q "<promise>COMPLETE</promise>"; then
+            echo ""
+            echo -e "${GREEN}${BOLD}Ralph completed all tasks!${NC}"
+            echo "Completed at iteration $i of $max_iterations"
+            return
+        fi
+
+        echo "Iteration $i complete. Continuing..."
+        sleep 2
+    done
+
+    echo ""
+    echo -e "${YELLOW}Ralph reached max iterations ($max_iterations) without completing all tasks.${NC}"
+    echo -e "Check ${CYAN}progress.txt${NC} for status, or run again with more iterations."
+}
+
+# --- Single task mode ---
+ralph_run_single() {
+    local dir="$1"
+    local engine="$2"
+    local task="$3"
+    local config="$dir/$RALPH_CONFIG_FILE"
+
+    local context=""
+    local language framework
+    language=$(read_config_value "$config" "project.language")
+    framework=$(read_config_value "$config" "project.framework")
+    [[ -n "$language" ]] && context+="Language: ${language}. "
+    [[ -n "$framework" ]] && context+="Framework: ${framework}. "
+
+    local rules=""
+    while IFS= read -r rule; do
+        [[ -n "$rule" ]] && rules+="- ${rule}\n"
+    done < <(read_config_value "$config" "rules")
+
+    local prompt="You are a coding agent. Complete this task:
+
+## Task
+${task}
+
+## Project Context
+${context}
+"
+    [[ -n "$rules" ]] && prompt+="
+## Rules
+$(echo -e "$rules")
+"
+    prompt+="
+## Instructions
+1. Implement the task
+2. Run quality checks (tests, lint, typecheck as applicable)
+3. Commit with a descriptive message
+4. Keep changes focused and minimal"
+
+    echo -e "${BOLD}vaibhav ralph run${NC} ${DIM}(single task)${NC}"
+    echo -e "  Task:    ${CYAN}${task}${NC}"
+    echo -e "  Engine:  ${CYAN}${engine}${NC}"
+    echo ""
+
+    case "$engine" in
+        amp)
+            echo "$prompt" | amp --dangerously-allow-all 2>&1
+            ;;
+        claude)
+            echo "$prompt" | claude --dangerously-skip-permissions --print 2>&1
+            ;;
+        opencode)
+            echo "$prompt" | opencode 2>&1
+            ;;
+        *)
+            echo -e "${RED}Error:${NC} Unknown engine '$engine'"
+            exit 1
+            ;;
+    esac
+}
+
 # --- Help ---
 ralph_help() {
     echo -e "${BOLD}vaibhav ralph${NC} — Ralph loop utility for AI-driven development"
     echo ""
-    echo -e "${BOLD}Usage:${NC}"
+    echo -e "${BOLD}Setup:${NC}"
     echo "  vaibhav ralph init [dir]           Auto-detect project and create .vaibhav/config.yaml"
     echo "  vaibhav ralph config               Show current project config"
     echo "  vaibhav ralph add-rule \"rule\"       Add a rule to the project config"
-    echo "  vaibhav ralph status               Show PRD progress"
     echo ""
-    echo -e "${BOLD}Coming soon:${NC}"
+    echo -e "${BOLD}PRD:${NC}"
     echo "  vaibhav ralph prd create <name>    Write a PRD with AI assistance"
     echo "  vaibhav ralph prd convert <file>   Convert markdown PRD to prd.json"
-    echo "  vaibhav ralph run                  Start the ralph loop"
+    echo "  vaibhav ralph prd list             List all PRDs and progress"
+    echo ""
+    echo -e "${BOLD}Run:${NC}"
+    echo "  vaibhav ralph run                  Start the ralph loop (uses prd.json)"
+    echo "  vaibhav ralph run \"fix the bug\"    Single task mode (no PRD needed)"
+    echo "  vaibhav ralph run --dry-run        Preview the prompt without executing"
+    echo "  vaibhav ralph run --engine claude   Override AI engine"
+    echo "  vaibhav ralph run --max-iterations 5"
+    echo "  vaibhav ralph status               Show PRD progress"
+    echo ""
+    echo -e "${BOLD}Workflow:${NC}"
+    echo "  1. vaibhav ralph init              Setup project config"
+    echo "  2. vaibhav ralph prd create auth   Write a PRD for a feature"
+    echo "  3. vaibhav ralph prd convert tasks/prd-auth.md"
+    echo "  4. vaibhav ralph run               Start the loop"
 }
 
 # --- Main dispatch ---
@@ -495,6 +1053,14 @@ case "${1:-}" in
             exit 1
         fi
         ralph_add_rule "$2"
+        ;;
+    prd)
+        shift
+        ralph_prd "$@"
+        ;;
+    run)
+        shift
+        ralph_run "$@"
         ;;
     status)
         ralph_status
