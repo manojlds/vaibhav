@@ -325,13 +325,11 @@ ralph_init() {
     echo -e "${DIM}Scanning ${dir}${NC}"
     echo ""
 
+    local existing_config=""
     if [[ -f "$dir/$RALPH_CONFIG_FILE" ]]; then
-        echo -e "  ${YELLOW}!${NC} Config already exists at ${CYAN}${RALPH_CONFIG_FILE}${NC}"
-        read -rp "  Overwrite? [y/N] " yn
-        if [[ ! "$yn" =~ ^[Yy]$ ]]; then
-            echo -e "  ${DIM}Aborted${NC}"
-            return
-        fi
+        existing_config="$dir/$RALPH_CONFIG_FILE"
+        echo -e "  ${DIM}Existing config found — will preserve rules, boundaries, and engine${NC}"
+        echo ""
     fi
 
     # Detect project
@@ -372,26 +370,77 @@ ralph_init() {
 
     echo ""
 
-    # Let user pick engine
+    # Preserve or ask for engine
     local engine="amp"
-    echo -e "  ${BOLD}Default AI engine:${NC}"
-    echo -e "    1) amp"
-    echo -e "    2) claude"
-    echo -e "    3) opencode"
-    read -rp "  Choose [1]: " engine_choice
-    case "${engine_choice:-1}" in
-        2) engine="claude" ;;
-        3) engine="opencode" ;;
-        *) engine="amp" ;;
-    esac
+    if [[ -n "$existing_config" ]]; then
+        engine=$(read_config_value "$existing_config" "engine")
+        engine="${engine:-amp}"
+        echo -e "  ${DIM}Engine:     ${engine} (preserved)${NC}"
+    else
+        echo -e "  ${BOLD}Default AI engine:${NC}"
+        echo -e "    1) amp"
+        echo -e "    2) claude"
+        echo -e "    3) opencode"
+        read -rp "  Choose [1]: " engine_choice
+        case "${engine_choice:-1}" in
+            2) engine="claude" ;;
+            3) engine="opencode" ;;
+            *) engine="amp" ;;
+        esac
+    fi
 
-    # Write config
+    # Save old config before overwriting
+    local old_config_tmp=""
+    if [[ -n "$existing_config" ]]; then
+        old_config_tmp=$(mktemp)
+        cp "$existing_config" "$old_config_tmp"
+    fi
+
+    # Write fresh config with detected values, then merge preserved fields
     write_config "$dir"
 
-    # Update engine in config
-    sed -i "s/^engine: .*/engine: \"$engine\"/" "$dir/$RALPH_CONFIG_FILE"
+    if [[ -n "$existing_config" ]]; then
+        # Merge: keep new detection results but restore rules, boundaries, engine, max_retries
+        python3 -c "
+import yaml
+
+with open('$dir/$RALPH_CONFIG_FILE') as f:
+    new = yaml.safe_load(f)
+with open('$old_config_tmp') as f:
+    old = yaml.safe_load(f)
+
+# Preserve customizations from old config
+new['engine'] = old.get('engine', '$engine')
+new['max_retries'] = old.get('max_retries', 3)
+if old.get('rules'):
+    new['rules'] = old['rules']
+if old.get('boundaries', {}).get('never_touch'):
+    new['boundaries'] = old['boundaries']
+# Preserve old commands if new detection found nothing
+old_cmds = old.get('commands') or {}
+new_cmds = new.get('commands') or {}
+merged_cmds = dict(old_cmds)
+for k, v in (new_cmds or {}).items():
+    if v:
+        merged_cmds[k] = v
+if merged_cmds:
+    new['commands'] = merged_cmds
+
+with open('$dir/$RALPH_CONFIG_FILE', 'w') as f:
+    f.write('# vaibhav ralph configuration\n')
+    f.write('# Auto-generated — edit as needed\n\n')
+    yaml.dump(new, f, default_flow_style=False, sort_keys=False)
+" 2>/dev/null
+        rm -f "$old_config_tmp"
+    else
+        # First time — just set the chosen engine
+        sed -i "s/^engine: .*/engine: \"$engine\"/" "$dir/$RALPH_CONFIG_FILE"
+    fi
 
     echo -e "  ${GREEN}✓${NC} Config written to ${CYAN}${dir}/${RALPH_CONFIG_FILE}${NC}"
+    if [[ -n "$existing_config" ]]; then
+        echo -e "  ${DIM}(rules, boundaries, and engine preserved from existing config)${NC}"
+    fi
     echo ""
     cat "$dir/$RALPH_CONFIG_FILE"
     echo ""
