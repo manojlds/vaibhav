@@ -348,7 +348,7 @@ update_termux() {
     # Create temp directory for downloads
     local tmp_dir
     tmp_dir=$(mktemp -d)
-    trap 'rm -rf "$tmp_dir"' EXIT
+    trap 'rm -rf "'"$tmp_dir"'"' EXIT
 
     # Download checksums first to check remote version
     echo -e "${DIM}Checking for updates...${NC}"

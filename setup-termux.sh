@@ -26,8 +26,7 @@ EXISTING_HOST=""
 EXISTING_USER=""
 if [[ -f "$CONFIG_FILE" ]]; then
     EXISTING_HOST=$(grep '^VAIBHAV_DESKTOP_HOST=' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2) || true
-    EXISTING_USER=$(grep '^VAIBHAV_SSH_HOST=' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2) || true
-    # Try to extract username from SSH config if available
+    # Extract username from SSH config (not from vaibhav config — it doesn't store username)
     if [[ -f ~/.ssh/config ]]; then
         EXISTING_USER=$(awk '/^# vaibhav/,/^$/{if(/User /){print $2}}' ~/.ssh/config 2>/dev/null) || true
     fi
@@ -119,6 +118,19 @@ if grep -q "# vaibhav — Desktop connection" ~/.ssh/config 2>/dev/null; then
         printf '\n%s\n' "$SSH_BLOCK" >> ~/.ssh/config
         ok "SSH config updated"
     fi
+elif grep -q "^Host desktop$" ~/.ssh/config 2>/dev/null; then
+    # Existing Host desktop block without vaibhav marker — replace it
+    echo -e "  ${YELLOW}Note:${NC} Replacing existing 'Host desktop' SSH config block"
+    awk '
+        /^Host desktop$/ { skip=1; next }
+        skip && /^$/ { skip=0; next }
+        skip && /^[^ \t]/ { skip=0 }
+        !skip { print }
+    ' ~/.ssh/config > ~/.ssh/config.tmp
+    mv ~/.ssh/config.tmp ~/.ssh/config
+    chmod 600 ~/.ssh/config
+    printf '\n%s\n' "$SSH_BLOCK" >> ~/.ssh/config
+    ok "SSH config updated (replaced existing Host desktop block)"
 else
     printf '\n%s\n' "$SSH_BLOCK" >> ~/.ssh/config
     chmod 600 ~/.ssh/config
