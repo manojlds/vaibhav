@@ -340,6 +340,54 @@ open_project() {
     fi
 }
 
+update_desktop() {
+    # Resolve repo directory from the symlink at ~/bin/vaibhav
+    local vaibhav_bin
+    vaibhav_bin=$(readlink -f "$HOME/bin/vaibhav")
+    if [[ -z "$vaibhav_bin" || ! -f "$vaibhav_bin" ]]; then
+        echo -e "${RED}Error:${NC} Cannot resolve vaibhav installation path from ~/bin/vaibhav"
+        return 1
+    fi
+    # Two levels up: bin/vaibhav -> bin/ -> repo root
+    local repo_dir
+    repo_dir=$(cd "$(dirname "$vaibhav_bin")/.." && pwd)
+
+    if [[ ! -d "$repo_dir/.git" ]]; then
+        echo -e "${RED}Error:${NC} Not a git repository: $repo_dir"
+        return 1
+    fi
+
+    local old_version="$VAIBHAV_VERSION"
+
+    # Check for local changes that would conflict with pull
+    if ! git -C "$repo_dir" diff --quiet 2>/dev/null || ! git -C "$repo_dir" diff --cached --quiet 2>/dev/null; then
+        echo -e "${YELLOW}Warning:${NC} Local changes detected in $repo_dir"
+        echo -e "  ${DIM}Commit or stash your changes before updating.${NC}"
+        return 1
+    fi
+
+    # Run git pull
+    local pull_output
+    pull_output=$(git -C "$repo_dir" pull 2>&1) || {
+        echo -e "${RED}Error:${NC} git pull failed"
+        echo "$pull_output"
+        return 1
+    }
+
+    # Check if already up to date
+    if echo "$pull_output" | grep -q "Already up to date"; then
+        echo -e "Already up to date (v${old_version})"
+        return 0
+    fi
+
+    # Source the new version
+    local new_version
+    new_version=$(grep '^VAIBHAV_VERSION=' "$vaibhav_bin" | cut -d'"' -f2)
+
+    echo -e "${GREEN}✓${NC} Updated: v${old_version} → v${new_version}"
+    return 0
+}
+
 show_usage() {
     echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC} — Project session manager for AI coding tools"
     echo ""
@@ -353,6 +401,7 @@ show_usage() {
     echo "  vaibhav add <name> <path>   Register a new project"
     echo "  vaibhav remove <name>       Unregister a project"
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
+    echo "  vaibhav update              Update vaibhav to the latest version"
     echo "  vaibhav ralph ...           Ralph loop utility (run 'vaibhav ralph help' for details)"
     echo ""
     echo -e "${BOLD}Examples:${NC}"
@@ -394,6 +443,9 @@ case "${1:-}" in
         ;;
     scan)
         scan_projects "${2:-}"
+        ;;
+    update)
+        update_desktop
         ;;
     ralph)
         shift
