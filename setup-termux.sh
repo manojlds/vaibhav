@@ -37,20 +37,20 @@ fi
 if [[ -n "${1:-}" ]]; then
     DESKTOP_HOST="$1"
 elif [[ -n "$EXISTING_HOST" ]]; then
-    read -rp "Desktop hostname or IP [$EXISTING_HOST]: " input_host
+    read -rp "Desktop hostname or IP [$EXISTING_HOST]: " input_host </dev/tty
     DESKTOP_HOST="${input_host:-$EXISTING_HOST}"
 else
-    read -rp "Desktop hostname or IP: " DESKTOP_HOST
+    read -rp "Desktop hostname or IP: " DESKTOP_HOST </dev/tty
 fi
 
 # Extract existing SSH user from SSH config for default
 if [[ -n "${2:-}" ]]; then
     DESKTOP_USER="$2"
 elif [[ -n "$EXISTING_USER" ]]; then
-    read -rp "Desktop username [$EXISTING_USER]: " input_user
+    read -rp "Desktop username [$EXISTING_USER]: " input_user </dev/tty
     DESKTOP_USER="${input_user:-$EXISTING_USER}"
 else
-    read -rp "Desktop username: " DESKTOP_USER
+    read -rp "Desktop username: " DESKTOP_USER </dev/tty
 fi
 echo ""
 
@@ -69,7 +69,7 @@ step "Mosh (optional)"
 if command -v mosh &>/dev/null; then
     ok "mosh already installed"
 else
-    read -rp "  Install mosh for resilient mobile connections? [y/N] " yn
+    read -rp "  Install mosh for resilient mobile connections? [y/N] " yn </dev/tty
     if [[ "$yn" =~ ^[Yy]$ ]]; then
         pkg install -y mosh
         ok "mosh installed"
@@ -154,7 +154,7 @@ else
         echo -e "  ${DIM}On your desktop, run:${NC}"
         echo -e "  ${DIM}echo '<paste_key>' >> ~/.ssh/authorized_keys${NC}"
         echo ""
-        read -rp "Press Enter once done..."
+        read -rp "Press Enter once done..." </dev/tty
     fi
 fi
 
@@ -235,7 +235,7 @@ step "Font setup"
 if [[ -f ~/.termux/font.ttf ]]; then
     ok "Custom font already installed"
 else
-    read -rp "Install FiraCode Nerd Font? (recommended for icons) [Y/n] " yn
+    read -rp "Install FiraCode Nerd Font? (recommended for icons) [Y/n] " yn </dev/tty
     if [[ ! "$yn" =~ ^[Nn]$ ]]; then
         curl -fsSL "https://github.com/ryanoasis/nerd-fonts/raw/HEAD/patched-fonts/FiraCode/Regular/FiraCodeNerdFont-Regular.ttf" -o ~/.termux/font.ttf
         ok "FiraCode Nerd Font installed"
