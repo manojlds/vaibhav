@@ -90,15 +90,14 @@ Project registry is stored at `~/.config/vaibhav/projects`.
 
 ## Updating
 
-On your phone, update the `vaibhav` command to the latest version:
-
 ```bash
-rm ~/bin/vaibhav && curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/manojlds/vaibhav/main/bin/vaibhav -o ~/bin/vaibhav && chmod +x ~/bin/vaibhav
+vaibhav update            # updates phone + desktop
+vaibhav update --local    # phone only
 ```
 
-Check the version with `vaibhav --version`.
+On Termux, this downloads and checksum-verifies the latest files, then SSHes to your desktop to `git pull`. On desktop, it runs `git pull` directly.
 
-On the desktop, `vaibhav` is symlinked to the repo — just `git pull` to update.
+See [UPDATE.md](UPDATE.md) for the full details on the update process, checksum verification, and troubleshooting.
 
 ## Ralph loop
 

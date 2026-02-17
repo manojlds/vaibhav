@@ -308,8 +308,6 @@ write_config() {
         echo "  never_touch:"
         echo "    - \"*.lock\""
         echo "    - \".env*\""
-        echo "    - \"prd.json\""
-        echo "    - \"progress.txt\""
         echo ""
         echo "engine: \"amp\"  # amp, claude, opencode"
         echo "max_retries: 3"

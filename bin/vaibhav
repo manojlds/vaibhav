@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.2.0"
+VAIBHAV_VERSION="0.3.0"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -54,8 +54,8 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
     set -- "${args[@]+"${args[@]}"}"
 
     case "${1:-}" in
-        init)
-            ;; # init always runs locally
+        init|update)
+            ;; # init and update always run locally
         list|ls|help|-h|--help)
             exec ssh "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             ;;
@@ -340,6 +340,200 @@ open_project() {
     fi
 }
 
+GITHUB_RAW_BASE="https://raw.githubusercontent.com/manojlds/vaibhav/main"
+
+update_termux() {
+    local old_version="$VAIBHAV_VERSION"
+
+    # Create temp directory for downloads
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "$tmp_dir"' EXIT
+
+    # Download checksums first to check remote version
+    echo -e "${DIM}Checking for updates...${NC}"
+    if ! curl -fsSL -H "Cache-Control: no-cache" \
+        "${GITHUB_RAW_BASE}/checksums.sha256" -o "$tmp_dir/checksums.sha256"; then
+        echo -e "${RED}Error:${NC} Failed to download checksums"
+        return 1
+    fi
+
+    # Download the main script to check version before doing full update
+    if ! curl -fsSL -H "Cache-Control: no-cache" \
+        "${GITHUB_RAW_BASE}/bin/vaibhav" -o "$tmp_dir/vaibhav"; then
+        echo -e "${RED}Error:${NC} Failed to download bin/vaibhav"
+        return 1
+    fi
+
+    # Check if already up to date by comparing version and checksums
+    local remote_version
+    remote_version=$(grep '^VAIBHAV_VERSION=' "$tmp_dir/vaibhav" | cut -d'"' -f2)
+    if [[ "$remote_version" == "$old_version" ]]; then
+        # Verify local files match remote checksums
+        local needs_update=false
+        local local_hash remote_hash
+        for check_file in "$HOME/bin/vaibhav" "$HOME/bin/vaibhav-ralph"; do
+            local basename
+            basename="bin/$(basename "$check_file")"
+            if [[ ! -f "$check_file" ]]; then
+                needs_update=true
+                break
+            fi
+            local_hash=$(sha256sum "$check_file" | cut -d' ' -f1)
+            remote_hash=$(grep "  ${basename}$" "$tmp_dir/checksums.sha256" | cut -d' ' -f1)
+            if [[ "$local_hash" != "$remote_hash" ]]; then
+                needs_update=true
+                break
+            fi
+        done
+        if [[ "$needs_update" == "false" ]]; then
+            echo -e "Already up to date (v${old_version})"
+            return 0
+        fi
+    fi
+
+    # Download remaining files
+    if ! curl -fsSL -H "Cache-Control: no-cache" \
+        "${GITHUB_RAW_BASE}/bin/vaibhav-ralph" -o "$tmp_dir/vaibhav-ralph"; then
+        echo -e "${RED}Error:${NC} Failed to download bin/vaibhav-ralph"
+        return 1
+    fi
+
+    # Verify checksums of downloaded files
+    # checksums.sha256 has paths like "bin/vaibhav" — we need to verify against our temp files
+    # Create a directory structure matching the checksum paths
+    mkdir -p "$tmp_dir/verify/bin"
+    cp "$tmp_dir/vaibhav" "$tmp_dir/verify/bin/vaibhav"
+    cp "$tmp_dir/vaibhav-ralph" "$tmp_dir/verify/bin/vaibhav-ralph"
+
+    # We only verify bin/ files; tmux.conf is not installed to ~/bin
+    # Extract just the bin/ entries from checksums and verify
+    local checksum_ok=true
+    while read -r expected_hash filepath; do
+        # Skip non-bin files (e.g., tmux.conf)
+        case "$filepath" in
+            bin/*) ;;
+            *) continue ;;
+        esac
+        local actual_hash
+        actual_hash=$(sha256sum "$tmp_dir/verify/$filepath" | cut -d' ' -f1)
+        if [[ "$expected_hash" != "$actual_hash" ]]; then
+            echo -e "${RED}Error:${NC} Checksum verification failed for $filepath"
+            echo -e "  Expected: ${expected_hash}"
+            echo -e "  Got:      ${actual_hash}"
+            checksum_ok=false
+        fi
+    done < "$tmp_dir/checksums.sha256"
+
+    if [[ "$checksum_ok" != "true" ]]; then
+        echo -e "${RED}Update aborted:${NC} Checksum verification failed. Existing files unchanged."
+        return 1
+    fi
+
+    # Atomic update: move verified files into place
+    cp "$tmp_dir/vaibhav" "$HOME/bin/vaibhav"
+    chmod +x "$HOME/bin/vaibhav"
+    cp "$tmp_dir/vaibhav-ralph" "$HOME/bin/vaibhav-ralph"
+    chmod +x "$HOME/bin/vaibhav-ralph"
+
+    local new_version="$remote_version"
+    echo -e "${GREEN}✓${NC} Updated: v${old_version} → v${new_version}"
+    return 0
+}
+
+update_desktop_remote() {
+    # SSH to the desktop and run git pull in the vaibhav repo
+    echo ""
+    echo -e "${DIM}Updating desktop via SSH...${NC}"
+
+    # Discover the repo path on the desktop via readlink
+    local remote_repo
+    if ! remote_repo=$(ssh "$VAIBHAV_SSH_HOST" 'repo=$(dirname "$(dirname "$(readlink -f "$HOME/bin/vaibhav")")") && echo "$repo"' 2>/dev/null); then
+        echo -e "${YELLOW}Warning:${NC} Could not connect to desktop via SSH — skipping desktop update"
+        return 0
+    fi
+
+    if [[ -z "$remote_repo" ]]; then
+        echo -e "${YELLOW}Warning:${NC} Could not resolve vaibhav repo path on desktop — skipping desktop update"
+        return 0
+    fi
+
+    # Get the old version on the desktop before pulling
+    local desktop_old_version
+    desktop_old_version=$(ssh "$VAIBHAV_SSH_HOST" "grep '^VAIBHAV_VERSION=' '$remote_repo/bin/vaibhav' | cut -d'\"' -f2" 2>/dev/null) || desktop_old_version="unknown"
+
+    # Check for local changes on desktop
+    if ! ssh "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' diff --quiet 2>/dev/null && git -C '$remote_repo' diff --cached --quiet 2>/dev/null" 2>/dev/null; then
+        echo -e "${YELLOW}Warning:${NC} Desktop has local changes — skipping desktop update"
+        return 0
+    fi
+
+    # Run git pull on the desktop
+    local pull_output
+    if ! pull_output=$(ssh "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' pull" 2>&1); then
+        echo -e "${YELLOW}Warning:${NC} Desktop git pull failed — skipping"
+        echo -e "  ${DIM}${pull_output}${NC}"
+        return 0
+    fi
+
+    if echo "$pull_output" | grep -q "Already up to date"; then
+        echo -e "${GREEN}✓${NC} Desktop already up to date (v${desktop_old_version})"
+    else
+        local desktop_new_version
+        desktop_new_version=$(ssh "$VAIBHAV_SSH_HOST" "grep '^VAIBHAV_VERSION=' '$remote_repo/bin/vaibhav' | cut -d'\"' -f2" 2>/dev/null) || desktop_new_version="unknown"
+        echo -e "${GREEN}✓${NC} Desktop updated: v${desktop_old_version} → v${desktop_new_version}"
+    fi
+    return 0
+}
+
+update_desktop() {
+    # Resolve repo directory from the symlink at ~/bin/vaibhav
+    local vaibhav_bin
+    vaibhav_bin=$(readlink -f "$HOME/bin/vaibhav")
+    if [[ -z "$vaibhav_bin" || ! -f "$vaibhav_bin" ]]; then
+        echo -e "${RED}Error:${NC} Cannot resolve vaibhav installation path from ~/bin/vaibhav"
+        return 1
+    fi
+    # Two levels up: bin/vaibhav -> bin/ -> repo root
+    local repo_dir
+    repo_dir=$(cd "$(dirname "$vaibhav_bin")/.." && pwd)
+
+    if [[ ! -d "$repo_dir/.git" ]]; then
+        echo -e "${RED}Error:${NC} Not a git repository: $repo_dir"
+        return 1
+    fi
+
+    local old_version="$VAIBHAV_VERSION"
+
+    # Check for local changes that would conflict with pull
+    if ! git -C "$repo_dir" diff --quiet 2>/dev/null || ! git -C "$repo_dir" diff --cached --quiet 2>/dev/null; then
+        echo -e "${YELLOW}Warning:${NC} Local changes detected in $repo_dir"
+        echo -e "  ${DIM}Commit or stash your changes before updating.${NC}"
+        return 1
+    fi
+
+    # Run git pull
+    local pull_output
+    pull_output=$(git -C "$repo_dir" pull 2>&1) || {
+        echo -e "${RED}Error:${NC} git pull failed"
+        echo "$pull_output"
+        return 1
+    }
+
+    # Check if already up to date
+    if echo "$pull_output" | grep -q "Already up to date"; then
+        echo -e "Already up to date (v${old_version})"
+        return 0
+    fi
+
+    # Source the new version
+    local new_version
+    new_version=$(grep '^VAIBHAV_VERSION=' "$vaibhav_bin" | cut -d'"' -f2)
+
+    echo -e "${GREEN}✓${NC} Updated: v${old_version} → v${new_version}"
+    return 0
+}
+
 show_usage() {
     echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC} — Project session manager for AI coding tools"
     echo ""
@@ -353,6 +547,7 @@ show_usage() {
     echo "  vaibhav add <name> <path>   Register a new project"
     echo "  vaibhav remove <name>       Unregister a project"
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
+    echo "  vaibhav update              Update vaibhav to the latest version"
     echo "  vaibhav ralph ...           Ralph loop utility (run 'vaibhav ralph help' for details)"
     echo ""
     echo -e "${BOLD}Examples:${NC}"
@@ -370,7 +565,7 @@ case "${1:-}" in
         show_usage
         ;;
     version|-v|--version)
-        echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
+        echo "vaibhav $VAIBHAV_VERSION"
         ;;
     init)
         init_config
@@ -394,6 +589,21 @@ case "${1:-}" in
         ;;
     scan)
         scan_projects "${2:-}"
+        ;;
+    update)
+        if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
+            update_termux
+            # Also update desktop unless --local flag is set
+            skip_desktop=false
+            for arg in "$@"; do
+                [[ "$arg" == "--local" ]] && skip_desktop=true
+            done
+            if [[ "$skip_desktop" == "false" ]]; then
+                update_desktop_remote
+            fi
+        else
+            update_desktop
+        fi
         ;;
     ralph)
         shift

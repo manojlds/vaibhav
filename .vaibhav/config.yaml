@@ -2,20 +2,22 @@
 # Auto-generated — edit as needed
 
 project:
-  name: vaibhav
-  language: Bash
+  name: "vaibhav"
+  language: "Bash"
+
 commands:
-  lint: shellcheck bin/vaibhav bin/vaibhav-ralph
+  lint: "shellcheck bin/vaibhav bin/vaibhav-ralph"
+
 rules:
-- use set -euo pipefail in all scripts
-- follow existing color/output conventions (step/ok/warn helpers)
-- keep scripts POSIX-compatible where possible, bash where needed
-- match existing coding style in bin/vaibhav
+  - "use set -euo pipefail in all scripts"
+  - "follow existing color/output conventions (step/ok/warn helpers)"
+  - "keep scripts POSIX-compatible where possible, bash where needed"
+  - "match existing coding style in bin/vaibhav"
+
 boundaries:
   never_touch:
-  - '*.lock'
-  - .env*
-  - prd.json
-  - progress.txt
-engine: amp
+    - "*.lock"
+    - ".env*"
+
+engine: "amp"
 max_retries: 3

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# generate-checksums - Generate SHA256 checksums for vaibhav distribution files
+# Usage: bin/generate-checksums
+# Produces checksums.sha256 in the repo root
+
+set -euo pipefail
+
+# Resolve repo root from this script's location
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Files to checksum (paths relative to repo root)
+FILES=(
+    "bin/vaibhav"
+    "bin/vaibhav-ralph"
+    "tmux.conf"
+)
+
+cd "$REPO_ROOT"
+
+# Verify all files exist
+for f in "${FILES[@]}"; do
+    if [[ ! -f "$f" ]]; then
+        echo "Error: $f not found" >&2
+        exit 1
+    fi
+done
+
+# Generate checksums (overwrites existing file)
+sha256sum "${FILES[@]}" > checksums.sha256
+
+echo "✓ checksums.sha256 updated"
