@@ -340,77 +340,55 @@ open_project() {
     fi
 }
 
-GITHUB_RAW_BASE="https://raw.githubusercontent.com/manojlds/vaibhav/main"
+GITHUB_REPO="manojlds/vaibhav"
+GITHUB_RELEASES_BASE="https://github.com/${GITHUB_REPO}/releases"
 
 update_termux() {
     local old_version="$VAIBHAV_VERSION"
 
-    # Create temp directory for downloads
     local tmp_dir
     tmp_dir=$(mktemp -d)
     trap 'rm -rf "'"$tmp_dir"'"' EXIT
 
-    # Download checksums first to check remote version
     echo -e "${DIM}Checking for updates...${NC}"
-    if ! curl -fsSL -H "Cache-Control: no-cache" \
-        "${GITHUB_RAW_BASE}/checksums.sha256" -o "$tmp_dir/checksums.sha256"; then
-        echo -e "${RED}Error:${NC} Failed to download checksums"
+
+    local latest_tag
+    latest_tag=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+    if [[ -z "$latest_tag" ]]; then
+        echo -e "${RED}Error:${NC} Failed to determine latest release tag"
         return 1
     fi
 
-    # Download the main script to check version before doing full update
-    if ! curl -fsSL -H "Cache-Control: no-cache" \
-        "${GITHUB_RAW_BASE}/bin/vaibhav" -o "$tmp_dir/vaibhav"; then
-        echo -e "${RED}Error:${NC} Failed to download bin/vaibhav"
-        return 1
-    fi
+    local remote_version="${latest_tag#v}"
 
-    # Check if already up to date by comparing version and checksums
-    local remote_version
-    remote_version=$(grep '^VAIBHAV_VERSION=' "$tmp_dir/vaibhav" | cut -d'"' -f2)
     if [[ "$remote_version" == "$old_version" ]]; then
-        # Verify local files match remote checksums
-        local needs_update=false
-        local local_hash remote_hash
-        for check_file in "$HOME/bin/vaibhav" "$HOME/bin/vaibhav-ralph"; do
-            local basename
-            basename="bin/$(basename "$check_file")"
-            if [[ ! -f "$check_file" ]]; then
-                needs_update=true
-                break
-            fi
-            local_hash=$(sha256sum "$check_file" | cut -d' ' -f1)
-            remote_hash=$(grep "  ${basename}$" "$tmp_dir/checksums.sha256" | cut -d' ' -f1)
-            if [[ "$local_hash" != "$remote_hash" ]]; then
-                needs_update=true
-                break
-            fi
-        done
-        if [[ "$needs_update" == "false" ]]; then
-            echo -e "Already up to date (v${old_version})"
-            return 0
-        fi
+        echo -e "Already up to date (v${old_version})"
+        return 0
     fi
 
-    # Download remaining files
-    if ! curl -fsSL -H "Cache-Control: no-cache" \
-        "${GITHUB_RAW_BASE}/bin/vaibhav-ralph" -o "$tmp_dir/vaibhav-ralph"; then
-        echo -e "${RED}Error:${NC} Failed to download bin/vaibhav-ralph"
+    local download_base="${GITHUB_RELEASES_BASE}/download/${latest_tag}"
+
+    if ! curl -fsSL "${download_base}/vaibhav" -o "$tmp_dir/vaibhav"; then
+        echo -e "${RED}Error:${NC} Failed to download vaibhav"
         return 1
     fi
 
-    # Verify checksums of downloaded files
-    # checksums.sha256 has paths like "bin/vaibhav" — we need to verify against our temp files
-    # Create a directory structure matching the checksum paths
+    if ! curl -fsSL "${download_base}/vaibhav-ralph" -o "$tmp_dir/vaibhav-ralph"; then
+        echo -e "${RED}Error:${NC} Failed to download vaibhav-ralph"
+        return 1
+    fi
+
+    if ! curl -fsSL "${download_base}/checksums.sha256" -o "$tmp_dir/checksums.sha256"; then
+        echo -e "${RED}Error:${NC} Failed to download checksums.sha256"
+        return 1
+    fi
+
     mkdir -p "$tmp_dir/verify/bin"
     cp "$tmp_dir/vaibhav" "$tmp_dir/verify/bin/vaibhav"
     cp "$tmp_dir/vaibhav-ralph" "$tmp_dir/verify/bin/vaibhav-ralph"
 
-    # We only verify bin/ files; tmux.conf is not installed to ~/bin
-    # Extract just the bin/ entries from checksums and verify
     local checksum_ok=true
     while read -r expected_hash filepath; do
-        # Skip non-bin files (e.g., tmux.conf)
         case "$filepath" in
             bin/*) ;;
             *) continue ;;
@@ -430,14 +408,12 @@ update_termux() {
         return 1
     fi
 
-    # Atomic update: move verified files into place
     cp "$tmp_dir/vaibhav" "$HOME/bin/vaibhav"
     chmod +x "$HOME/bin/vaibhav"
     cp "$tmp_dir/vaibhav-ralph" "$HOME/bin/vaibhav-ralph"
     chmod +x "$HOME/bin/vaibhav-ralph"
 
-    local new_version="$remote_version"
-    echo -e "${GREEN}✓${NC} Updated: v${old_version} → v${new_version}"
+    echo -e "${GREEN}✓${NC} Updated: v${old_version} → v${remote_version}"
     return 0
 }
 
@@ -470,7 +446,7 @@ update_desktop_remote() {
 
     # Run git pull on the desktop
     local pull_output
-    if ! pull_output=$(ssh "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' pull" 2>&1); then
+    if ! pull_output=$(ssh "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' fetch origin && git -C '$remote_repo' checkout main && git -C '$remote_repo' pull origin main" 2>&1); then
         echo -e "${YELLOW}Warning:${NC} Desktop git pull failed — skipping"
         echo -e "  ${DIM}${pull_output}${NC}"
         return 0
@@ -514,7 +490,7 @@ update_desktop() {
 
     # Run git pull
     local pull_output
-    pull_output=$(git -C "$repo_dir" pull 2>&1) || {
+    pull_output=$(git -C "$repo_dir" checkout main && git -C "$repo_dir" pull origin main 2>&1) || {
         echo -e "${RED}Error:${NC} git pull failed"
         echo "$pull_output"
         return 1
