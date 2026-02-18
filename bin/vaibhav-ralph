@@ -891,35 +891,90 @@ ralph_run() {
     fi
 
     local config="$dir/$RALPH_CONFIG_FILE"
-    local engine max_iterations single_task dry_run
+    local engine max_iterations single_task dry_run no_tmux
     engine=$(read_config_value "$config" "engine")
     engine="${engine:-amp}"
     max_iterations=10
     single_task=""
     dry_run=false
+    no_tmux=false
 
     # Parse args
+    local run_args=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --engine)
                 engine="$2"
+                run_args+=("$1" "$2")
                 shift 2
                 ;;
             --max-iterations)
                 max_iterations="$2"
+                run_args+=("$1" "$2")
                 shift 2
                 ;;
             --dry-run)
                 dry_run=true
+                run_args+=("$1")
+                shift
+                ;;
+            --no-tmux)
+                no_tmux=true
                 shift
                 ;;
             *)
                 # Treat as single task description
                 single_task="$1"
+                run_args+=("$1")
                 shift
                 ;;
         esac
     done
+
+    # Launch inside tmux unless --no-tmux, --dry-run, or already inside the ralph tmux session
+    if [[ "$no_tmux" == "false" && "$dry_run" == "false" ]]; then
+        local project_name
+        project_name=$(read_config_value "$config" "project.name")
+        project_name="${project_name:-$(basename "$dir")}"
+        local session_name="ralph-${project_name}"
+
+        # If already inside this ralph tmux session, continue without re-wrapping
+        if [[ "${VAIBHAV_RALPH_TMUX:-}" != "$session_name" ]]; then
+            if tmux has-session -t "$session_name" 2>/dev/null; then
+                echo -e "${BOLD}Ralph is already running${NC} in tmux session ${CYAN}${session_name}${NC}"
+                echo -e "  Attach with: ${CYAN}tmux attach -t ${session_name}${NC}"
+                echo ""
+                read -rp "Attach to existing session? [Y/n] " yn
+                if [[ "$yn" =~ ^[Nn]$ ]]; then
+                    return
+                fi
+                if [[ -n "${TMUX:-}" ]]; then
+                    tmux switch-client -t "$session_name"
+                else
+                    tmux attach-session -t "$session_name"
+                fi
+                return
+            fi
+
+            # Build the command to re-exec inside tmux
+            local tmux_cmd
+            tmux_cmd="cd $(printf '%q' "$dir") && VAIBHAV_RALPH_TMUX=$(printf '%q' "$session_name") $(printf '%q' "$0") run --no-tmux"
+            for arg in "${run_args[@]+"${run_args[@]}"}"; do
+                tmux_cmd+=" $(printf '%q' "$arg")"
+            done
+
+            echo -e "${DIM}Starting ralph in tmux session: ${session_name}${NC}"
+            tmux new-session -d -s "$session_name" -c "$dir" bash -c "$tmux_cmd"
+
+            # Attach to the session
+            if [[ -n "${TMUX:-}" ]]; then
+                tmux switch-client -t "$session_name"
+            else
+                tmux attach-session -t "$session_name"
+            fi
+            return
+        fi
+    fi
 
     # Single task mode (no PRD needed)
     if [[ -n "$single_task" ]]; then
@@ -1122,6 +1177,7 @@ ralph_help() {
     echo "  vaibhav ralph run --dry-run        Preview the prompt without executing"
     echo "  vaibhav ralph run --engine claude   Override AI engine"
     echo "  vaibhav ralph run --max-iterations 5"
+    echo "  vaibhav ralph run --no-tmux        Run directly without tmux wrapping"
     echo "  vaibhav ralph status               Show PRD progress"
     echo ""
     echo -e "${BOLD}Options:${NC}"

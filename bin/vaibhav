@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.3.2"
+VAIBHAV_VERSION="0.3.3"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -172,6 +172,12 @@ list_projects() {
             indicator="${GREEN}●${NC}"
         fi
 
+        # Check for ralph session
+        if echo "$active_sessions" | grep -qx "ralph-${name}" 2>/dev/null; then
+            status+=" ${YELLOW}ralph running${NC}"
+            [[ "$indicator" == " " ]] && indicator="${YELLOW}●${NC}"
+        fi
+
         echo -e "  ${indicator} ${CYAN}${name}${NC} ${DIM}→${NC} ${path}"
         echo -e "    ${status}"
     done < "$PROJECTS_FILE"
@@ -182,6 +188,11 @@ list_projects() {
     if [[ -n "$active_sessions" ]]; then
         local orphans=""
         while IFS= read -r session; do
+            # Skip ralph sessions (shown with their project above)
+            local base_name="${session#ralph-}"
+            if [[ "$base_name" != "$session" ]] && grep -q "^${base_name}=" "$PROJECTS_FILE" 2>/dev/null; then
+                continue
+            fi
             if ! grep -q "^${session}=" "$PROJECTS_FILE" 2>/dev/null; then
                 orphans+="  ${YELLOW}?${NC} ${session}\n"
             fi
