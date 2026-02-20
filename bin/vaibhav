@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.3.4"
+VAIBHAV_VERSION="0.3.5"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -379,21 +379,56 @@ setup_termux() {
 
     # --- mosh ---
     step "Checking mosh"
+    local mosh_just_installed=false
     if command -v mosh &>/dev/null; then
         ok "mosh already installed"
     elif [[ "${VAIBHAV_USE_MOSH:-false}" == "true" ]]; then
         pkg install -y mosh
         ok "mosh installed (VAIBHAV_USE_MOSH=true)"
-    elif [[ "$post_update" == "false" ]]; then
-        read -rp "  Install mosh for resilient mobile connections? [y/N] " yn </dev/tty
-        if [[ "$yn" =~ ^[Yy]$ ]]; then
-            pkg install -y mosh
-            ok "mosh installed"
-        else
-            skip "mosh (install later with: pkg install mosh)"
-        fi
+        mosh_just_installed=true
     else
-        skip "mosh not installed (set VAIBHAV_USE_MOSH=true to auto-install)"
+        # Check if desktop has mosh-server
+        local desktop_has_mosh=false
+        if [[ -n "${VAIBHAV_SSH_HOST:-}" ]] && ssh -o BatchMode=yes -o ConnectTimeout=5 "$VAIBHAV_SSH_HOST" "command -v mosh-server" &>/dev/null; then
+            desktop_has_mosh=true
+        fi
+
+        if [[ "$desktop_has_mosh" == "true" ]]; then
+            echo -e "  ${DIM}Desktop has mosh-server — installing mosh client...${NC}"
+            pkg install -y mosh
+            ok "mosh installed (desktop has mosh-server)"
+            mosh_just_installed=true
+        elif [[ "$post_update" == "false" ]]; then
+            read -rp "  Install mosh for resilient mobile connections? [y/N] " yn </dev/tty
+            if [[ "$yn" =~ ^[Yy]$ ]]; then
+                pkg install -y mosh
+                ok "mosh installed"
+                mosh_just_installed=true
+            else
+                skip "mosh (install later with: pkg install mosh)"
+            fi
+        else
+            skip "mosh not installed"
+        fi
+    fi
+
+    # Offer to enable mosh if installed but not enabled
+    if command -v mosh &>/dev/null && [[ "${VAIBHAV_USE_MOSH:-false}" != "true" ]]; then
+        if [[ "$mosh_just_installed" == "true" ]] || [[ "$post_update" == "false" ]]; then
+            echo ""
+            read -rp "  Enable mosh by default? (use mosh for all connections) [Y/n] " yn </dev/tty
+            if [[ ! "$yn" =~ ^[Nn]$ ]]; then
+                if [[ -f "$CONFIG_FILE" ]] && grep -q '^VAIBHAV_USE_MOSH=' "$CONFIG_FILE"; then
+                    sed -i 's/^VAIBHAV_USE_MOSH=.*/VAIBHAV_USE_MOSH="true"/' "$CONFIG_FILE"
+                else
+                    echo 'VAIBHAV_USE_MOSH="true"' >> "$CONFIG_FILE"
+                fi
+                VAIBHAV_USE_MOSH="true"
+                ok "mosh enabled (VAIBHAV_USE_MOSH=true)"
+            else
+                ok "mosh installed but not enabled (use --mosh flag per connection)"
+            fi
+        fi
     fi
 
     # --- vaibhav-ralph ---
