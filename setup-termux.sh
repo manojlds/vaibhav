@@ -64,20 +64,6 @@ else
     ok "openssh installed"
 fi
 
-# --- mosh (optional) ---
-step "Mosh (optional)"
-if command -v mosh &>/dev/null; then
-    ok "mosh already installed"
-else
-    read -rp "  Install mosh for resilient mobile connections? [y/N] " yn </dev/tty
-    if [[ "$yn" =~ ^[Yy]$ ]]; then
-        pkg install -y mosh
-        ok "mosh installed"
-    else
-        ok "mosh skipped (can install later with: pkg install mosh)"
-    fi
-fi
-
 # --- SSH key ---
 step "Setting up SSH key"
 mkdir -p ~/.ssh
@@ -176,74 +162,10 @@ VAIBHAV_SSH_HOST="desktop"
 EOF
 ok "Config saved to $CONFIG_DIR/config"
 
-# --- Shell config ---
-step "Adding shell config"
-SHELL_RC="$HOME/.bashrc"
-if [[ -f "$HOME/.zshrc" ]]; then
-    SHELL_RC="$HOME/.zshrc"
-fi
-
-if grep -q '# vaibhav' "$SHELL_RC" 2>/dev/null; then
-    # Check if PATH line is already there
-    if grep -q 'PATH=.*\$HOME/bin' "$SHELL_RC" 2>/dev/null; then
-        ok "PATH already configured in $SHELL_RC"
-    else
-        cat >> "$SHELL_RC" << 'ALIASES'
-
-# vaibhav
-export PATH="$HOME/bin:$PATH"
-ALIASES
-        ok "PATH configured in $SHELL_RC"
-    fi
-else
-    cat >> "$SHELL_RC" << 'ALIASES'
-
-# vaibhav
-export PATH="$HOME/bin:$PATH"
-ALIASES
-    ok "PATH configured in $SHELL_RC"
-fi
-
-# --- Termux extra keys ---
-step "Configuring Termux keyboard"
-mkdir -p ~/.termux
-if [[ ! -f ~/.termux/termux.properties ]]; then
-    cat > ~/.termux/termux.properties << 'PROPS'
-# Extra keys row for tmux and coding
-extra-keys = [ \
-  ['ESC', 'CTRL', 'ALT', 'TAB', '|', '-', 'UP', 'DOWN'] \
-]
-PROPS
-    ok "Extra keyboard row configured"
-    warn "Run 'termux-reload-settings' to apply"
-elif grep -q "extra-keys" ~/.termux/termux.properties 2>/dev/null; then
-    ok "Extra keys already configured"
-else
-    echo '' >> ~/.termux/termux.properties
-    cat >> ~/.termux/termux.properties << 'PROPS'
-# Extra keys row for tmux and coding
-extra-keys = [ \
-  ['ESC', 'CTRL', 'ALT', 'TAB', '|', '-', 'UP', 'DOWN'] \
-]
-PROPS
-    ok "Extra keyboard row added"
-    warn "Run 'termux-reload-settings' to apply"
-fi
-
-# --- Font ---
-step "Font setup"
-if [[ -f ~/.termux/font.ttf ]]; then
-    ok "Custom font already installed"
-else
-    read -rp "Install FiraCode Nerd Font? (recommended for icons) [Y/n] " yn </dev/tty
-    if [[ ! "$yn" =~ ^[Nn]$ ]]; then
-        curl -fsSL "https://github.com/ryanoasis/nerd-fonts/raw/HEAD/patched-fonts/FiraCode/Regular/FiraCodeNerdFont-Regular.ttf" -o ~/.termux/font.ttf
-        ok "FiraCode Nerd Font installed"
-        termux-reload-settings 2>/dev/null || true
-    else
-        ok "Font skipped"
-    fi
-fi
+# --- Run vaibhav setup for environment config ---
+# This handles: mosh, vaibhav-ralph, PATH, extra keys, font
+echo ""
+"$HOME/bin/vaibhav" setup
 
 # --- Summary ---
 echo ""

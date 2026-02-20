@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.3.3"
+VAIBHAV_VERSION="0.3.4"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -54,8 +54,8 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
     set -- "${args[@]+"${args[@]}"}"
 
     case "${1:-}" in
-        init|update)
-            ;; # init and update always run locally
+        init|update|setup)
+            ;; # init, update, and setup always run locally
         list|ls|help|-h|--help)
             exec ssh "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             ;;
@@ -351,6 +351,133 @@ open_project() {
     fi
 }
 
+step() { echo -e "\n${CYAN}▶${NC} ${BOLD}$1${NC}"; }
+ok() { echo -e "  ${GREEN}✓${NC} $1"; }
+skip() { echo -e "  ${DIM}skip${NC} $1"; }
+
+# --- setup (Termux environment sync) ---
+# Idempotent, non-interactive in --post-update mode
+# Ensures Termux-side packages and config are up to date
+setup_termux() {
+    local post_update=false
+    for arg in "$@"; do
+        [[ "$arg" == "--post-update" ]] && post_update=true
+    done
+
+    if [[ "$post_update" == "false" ]]; then
+        echo -e "${BOLD}vaibhav setup${NC}"
+    fi
+
+    # --- openssh ---
+    step "Checking openssh"
+    if command -v ssh &>/dev/null; then
+        ok "openssh installed"
+    else
+        pkg install -y openssh
+        ok "openssh installed"
+    fi
+
+    # --- mosh ---
+    step "Checking mosh"
+    if command -v mosh &>/dev/null; then
+        ok "mosh already installed"
+    elif [[ "${VAIBHAV_USE_MOSH:-false}" == "true" ]]; then
+        pkg install -y mosh
+        ok "mosh installed (VAIBHAV_USE_MOSH=true)"
+    elif [[ "$post_update" == "false" ]]; then
+        read -rp "  Install mosh for resilient mobile connections? [y/N] " yn </dev/tty
+        if [[ "$yn" =~ ^[Yy]$ ]]; then
+            pkg install -y mosh
+            ok "mosh installed"
+        else
+            skip "mosh (install later with: pkg install mosh)"
+        fi
+    else
+        skip "mosh not installed (set VAIBHAV_USE_MOSH=true to auto-install)"
+    fi
+
+    # --- vaibhav-ralph ---
+    step "Checking vaibhav-ralph"
+    if [[ -x "$HOME/bin/vaibhav-ralph" ]]; then
+        ok "vaibhav-ralph installed"
+    else
+        echo -e "  ${DIM}Downloading vaibhav-ralph...${NC}"
+        local ralph_url="https://raw.githubusercontent.com/manojlds/vaibhav/main/bin/vaibhav-ralph"
+        if curl -fsSL "$ralph_url" -o "$HOME/bin/vaibhav-ralph"; then
+            chmod +x "$HOME/bin/vaibhav-ralph"
+            ok "vaibhav-ralph installed"
+        else
+            echo -e "  ${YELLOW}!${NC} Failed to download vaibhav-ralph (non-fatal)"
+        fi
+    fi
+
+    # --- Shell PATH ---
+    step "Checking PATH"
+    local shell_rc="$HOME/.bashrc"
+    if [[ -f "$HOME/.zshrc" ]]; then
+        shell_rc="$HOME/.zshrc"
+    fi
+
+    if grep -q 'PATH=.*\$HOME/bin' "$shell_rc" 2>/dev/null; then
+        ok "PATH already configured in $shell_rc"
+    else
+        cat >> "$shell_rc" << 'PATHBLOCK'
+
+# vaibhav
+export PATH="$HOME/bin:$PATH"
+PATHBLOCK
+        ok "PATH configured in $shell_rc"
+    fi
+
+    # --- Termux extra keys ---
+    step "Checking Termux keyboard"
+    if [[ -d "$HOME/.termux" ]] || command -v termux-info &>/dev/null; then
+        mkdir -p ~/.termux
+        if [[ ! -f ~/.termux/termux.properties ]]; then
+            cat > ~/.termux/termux.properties << 'PROPS'
+# Extra keys row for tmux and coding
+extra-keys = [ \
+  ['ESC', 'CTRL', 'ALT', 'TAB', '|', '-', 'UP', 'DOWN'] \
+]
+PROPS
+            ok "Extra keyboard row configured"
+        elif grep -q "extra-keys" ~/.termux/termux.properties 2>/dev/null; then
+            ok "Extra keys already configured"
+        else
+            echo '' >> ~/.termux/termux.properties
+            cat >> ~/.termux/termux.properties << 'PROPS'
+# Extra keys row for tmux and coding
+extra-keys = [ \
+  ['ESC', 'CTRL', 'ALT', 'TAB', '|', '-', 'UP', 'DOWN'] \
+]
+PROPS
+            ok "Extra keyboard row added"
+        fi
+    else
+        skip "not running in Termux"
+    fi
+
+    # --- Font (interactive only) ---
+    if [[ "$post_update" == "false" ]] && command -v termux-info &>/dev/null; then
+        step "Font setup"
+        if [[ -f ~/.termux/font.ttf ]]; then
+            ok "Custom font already installed"
+        else
+            read -rp "Install FiraCode Nerd Font? (recommended for icons) [Y/n] " yn </dev/tty
+            if [[ ! "$yn" =~ ^[Nn]$ ]]; then
+                curl -fsSL "https://github.com/ryanoasis/nerd-fonts/raw/HEAD/patched-fonts/FiraCode/Regular/FiraCodeNerdFont-Regular.ttf" -o ~/.termux/font.ttf
+                ok "FiraCode Nerd Font installed"
+                termux-reload-settings 2>/dev/null || true
+            else
+                skip "font"
+            fi
+        fi
+    fi
+
+    echo ""
+    echo -e "${GREEN}✓${NC} Setup complete"
+}
+
 GITHUB_REPO="manojlds/vaibhav"
 GITHUB_RELEASES_BASE="https://github.com/${GITHUB_REPO}/releases"
 
@@ -534,6 +661,7 @@ show_usage() {
     echo "  vaibhav add <name> <path>   Register a new project"
     echo "  vaibhav remove <name>       Unregister a project"
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
+    echo "  vaibhav setup               Set up Termux environment (packages, config)"
     echo "  vaibhav update              Update vaibhav to the latest version"
     echo "  vaibhav ralph ...           Ralph loop utility (run 'vaibhav ralph help' for details)"
     echo ""
@@ -577,9 +705,14 @@ case "${1:-}" in
     scan)
         scan_projects "${2:-}"
         ;;
+    setup)
+        setup_termux "${@:2}"
+        ;;
     update)
         if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
             update_termux
+            # Run setup with the newly updated vaibhav to apply any new setup steps
+            "$HOME/bin/vaibhav" setup --post-update || true
             # Also update desktop unless --local flag is set
             skip_desktop=false
             for arg in "$@"; do
