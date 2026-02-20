@@ -34,7 +34,7 @@ Do NOT modify these files:
 APPEND to progress.txt (never replace, always append):
 ```
 ## [Date/Time] - [Story ID]
-Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+Session: [Session URL/ID if available, else N/A]
 - What was implemented
 - Files changed
 - **Learnings for future iterations:**
@@ -44,7 +44,7 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
 ---
 ```
 
-Include the thread URL so future iterations can use the `read_thread` tool to reference previous work if needed.
+Include a session reference if your engine provides one. Otherwise write `N/A`.
 
 ## Consolidate Patterns
 

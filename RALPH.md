@@ -321,7 +321,7 @@ Each iteration appends what it learned. Future iterations read this to avoid rep
 - Always validate with zod schemas from lib/validators
 
 ## 2026-02-17 14:32 - US-001
-Thread: https://ampcode.com/threads/T-abc123
+Session: [session URL/ID if available, else N/A]
 - Added users table with email, password_hash, created_at
 - Files: prisma/schema.prisma, prisma/migrations/
 - Learnings:
