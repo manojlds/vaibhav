@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.3.8"
+VAIBHAV_VERSION="0.3.9"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -62,7 +62,7 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
         *)
             if [[ "$use_mosh" == "true" ]] && command -v mosh &>/dev/null; then
                 echo -e "  ${DIM}connecting via mosh...${NC}"
-                exec mosh "$VAIBHAV_SSH_HOST" -- "\$HOME/bin/vaibhav $*"
+                exec mosh "$VAIBHAV_SSH_HOST" -- sh -c "\$HOME/bin/vaibhav $*"
             else
                 if [[ "$use_mosh" == "true" ]]; then
                     echo -e "  ${YELLOW}!${NC} ${DIM}mosh not found, falling back to ssh${NC}"
