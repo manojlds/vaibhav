@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.3.5"
+VAIBHAV_VERSION="0.3.6"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -581,10 +581,14 @@ update_termux() {
         return 1
     fi
 
-    cp "$tmp_dir/vaibhav" "$HOME/bin/vaibhav"
-    chmod +x "$HOME/bin/vaibhav"
-    cp "$tmp_dir/vaibhav-ralph" "$HOME/bin/vaibhav-ralph"
-    chmod +x "$HOME/bin/vaibhav-ralph"
+    # Stage in ~/bin so mv is same-filesystem (atomic rename, preserves old inode)
+    # cp would overwrite inode contents while bash is still reading this script
+    cp "$tmp_dir/vaibhav" "$HOME/bin/vaibhav.new"
+    chmod +x "$HOME/bin/vaibhav.new"
+    mv -f "$HOME/bin/vaibhav.new" "$HOME/bin/vaibhav"
+    cp "$tmp_dir/vaibhav-ralph" "$HOME/bin/vaibhav-ralph.new"
+    chmod +x "$HOME/bin/vaibhav-ralph.new"
+    mv -f "$HOME/bin/vaibhav-ralph.new" "$HOME/bin/vaibhav-ralph"
 
     echo -e "${GREEN}✓${NC} Updated: v${old_version} → v${remote_version}"
     return 0
