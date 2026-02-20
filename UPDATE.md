@@ -32,8 +32,9 @@ Runs `git pull` in the vaibhav repo (since the desktop script is symlinked to th
 ```
 vaibhav update
   │
-  ├─ Query GitHub Releases API for latest tag
-  ├─ Compare tag version to installed version
+  ├─ Download latest `vaibhav` release asset
+  ├─ Read embedded version from downloaded script
+  ├─ Compare remote version to installed version
   │
   ├─ Same version?
   │   └─ "Already up to date (v0.3.0)" → done

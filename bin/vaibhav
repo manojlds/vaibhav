@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.4.4"
+VAIBHAV_VERSION="0.4.5"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -564,25 +564,30 @@ update_termux() {
 
     echo -e "${DIM}Checking for updates...${NC}"
 
-    local latest_tag
-    latest_tag=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
-    if [[ -z "$latest_tag" ]]; then
-        echo -e "${RED}Error:${NC} Failed to determine latest release tag"
+    local download_base="${GITHUB_RELEASES_BASE}/latest/download"
+
+    if ! curl -fsSL "${download_base}/vaibhav" -o "$tmp_dir/vaibhav"; then
+        echo -e "${RED}Error:${NC} Failed to download latest vaibhav"
         return 1
     fi
 
-    local remote_version="${latest_tag#v}"
+    local remote_version
+    remote_version=$(sed -n 's/^VAIBHAV_VERSION="\([^"]*\)"/\1/p' "$tmp_dir/vaibhav" | head -n1)
+    if [[ -z "$remote_version" ]]; then
+        echo -e "${RED}Error:${NC} Failed to determine latest version"
+        return 1
+    fi
 
     if [[ "$remote_version" == "$old_version" ]]; then
         echo -e "Already up to date (v${old_version})"
         return 0
     fi
 
-    local download_base="${GITHUB_RELEASES_BASE}/download/${latest_tag}"
-
-    if ! curl -fsSL "${download_base}/vaibhav" -o "$tmp_dir/vaibhav"; then
-        echo -e "${RED}Error:${NC} Failed to download vaibhav"
-        return 1
+    local highest_version
+    highest_version=$(printf '%s\n%s\n' "$old_version" "$remote_version" | sort -V | tail -n1)
+    if [[ "$highest_version" == "$old_version" ]]; then
+        echo -e "Installed version (v${old_version}) is newer than latest release (v${remote_version}); skipping"
+        return 0
     fi
 
     if ! curl -fsSL "${download_base}/vaibhav-ralph" -o "$tmp_dir/vaibhav-ralph"; then
