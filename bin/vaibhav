@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.4.2"
+VAIBHAV_VERSION="0.4.3"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -247,6 +247,38 @@ remove_project() {
         if [[ "$yn" =~ ^[Yy]$ ]]; then
             tmux kill-session -t "$name"
             echo -e "  ${DIM}Session killed${NC}"
+        fi
+    fi
+}
+
+kill_project() {
+    local name="$1"
+    local window="${2:-}"
+
+    if ! tmux has-session -t "$name" 2>/dev/null; then
+        echo -e "${RED}Error:${NC} No active session for '${name}'"
+        exit 1
+    fi
+
+    if [[ -n "$window" ]]; then
+        # Kill specific window
+        if ! tmux list-windows -t "$name" -F "#{window_name}" | grep -qx "$window"; then
+            echo -e "${RED}Error:${NC} Window '${window}' not found in session '${name}'"
+            echo -e "${DIM}Active windows:${NC}"
+            tmux list-windows -t "$name" -F "  #{window_index}: #{window_name}" 2>/dev/null
+            exit 1
+        fi
+        tmux kill-window -t "${name}:${window}"
+        echo -e "${GREEN}✓${NC} Killed window ${CYAN}${window}${NC} in ${CYAN}${name}${NC}"
+    else
+        # Kill entire session — show windows first
+        echo -e "${BOLD}Session:${NC} ${CYAN}${name}${NC}"
+        tmux list-windows -t "$name" -F "  #{window_index}: #{window_name}" 2>/dev/null
+        echo ""
+        read -rp "Kill entire session? [y/N] " yn
+        if [[ "$yn" =~ ^[Yy]$ ]]; then
+            tmux kill-session -t "$name"
+            echo -e "${GREEN}✓${NC} Session ${CYAN}${name}${NC} killed"
         fi
     fi
 }
@@ -698,6 +730,8 @@ show_usage() {
     echo "  vaibhav <name> --mosh       Open a project using mosh (resilient connection)"
     echo "  vaibhav <name> <tool> --mosh  Open with an AI tool via mosh"
     echo "  vaibhav add <name> <path>   Register a new project"
+    echo "  vaibhav kill <name>         Kill a project's tmux session"
+    echo "  vaibhav kill <name> <win>   Kill a specific window in a project"
     echo "  vaibhav remove <name>       Unregister a project"
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
     echo "  vaibhav setup               Set up Termux environment (packages, config)"
@@ -733,6 +767,13 @@ case "${1:-}" in
             exit 1
         fi
         add_project "$2" "$3"
+        ;;
+    kill)
+        if [[ $# -lt 2 ]]; then
+            echo -e "${RED}Usage:${NC} vaibhav kill <name> [window]"
+            exit 1
+        fi
+        kill_project "$2" "${3:-}"
         ;;
     remove|rm)
         if [[ $# -lt 2 ]]; then
