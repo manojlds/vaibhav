@@ -159,6 +159,7 @@ cat > "$CONFIG_FILE" << EOF
 # vaibhav configuration (remote mode)
 VAIBHAV_DESKTOP_HOST="${DESKTOP_HOST}"
 VAIBHAV_SSH_HOST="desktop"
+VAIBHAV_MOSH_NO_INIT="true"
 EOF
 ok "Config saved to $CONFIG_DIR/config"
 

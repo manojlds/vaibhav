@@ -84,6 +84,7 @@ VAIBHAV_PROJECTS_DIR="/home/user/projects"    # Where your projects live
 VAIBHAV_DESKTOP_HOST="mypc"                   # Desktop hostname (enables remote mode)
 VAIBHAV_SSH_HOST="desktop"                    # SSH host alias
 VAIBHAV_USE_MOSH="false"                      # Use mosh by default (true/false)
+VAIBHAV_MOSH_NO_INIT="true"                   # Pass --no-init to mosh (better touch scroll in Termux)
 ```
 
 Project registry is stored at `~/.config/vaibhav/projects`.

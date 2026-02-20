@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.4.3"
+VAIBHAV_VERSION="0.4.4"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -37,6 +37,7 @@ fi
 VAIBHAV_DESKTOP_HOST="${VAIBHAV_DESKTOP_HOST:-}"
 VAIBHAV_SSH_HOST="${VAIBHAV_SSH_HOST:-desktop}"
 VAIBHAV_USE_MOSH="${VAIBHAV_USE_MOSH:-false}"
+VAIBHAV_MOSH_NO_INIT="${VAIBHAV_MOSH_NO_INIT:-true}"
 
 if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
     echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
@@ -61,8 +62,12 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
             ;;
         *)
             if [[ "$use_mosh" == "true" ]] && command -v mosh &>/dev/null; then
+                mosh_args=()
+                if [[ "$VAIBHAV_MOSH_NO_INIT" == "true" ]]; then
+                    mosh_args+=(--no-init)
+                fi
                 echo -e "  ${DIM}connecting via mosh...${NC}"
-                exec mosh "$VAIBHAV_SSH_HOST" -- sh -c "\$SHELL -lic \"\\\$HOME/bin/vaibhav $*\""
+                exec mosh "${mosh_args[@]}" "$VAIBHAV_SSH_HOST" -- sh -c "\$SHELL -lic \"\\\$HOME/bin/vaibhav $*\""
             else
                 if [[ "$use_mosh" == "true" ]]; then
                     echo -e "  ${YELLOW}!${NC} ${DIM}mosh not found, falling back to ssh${NC}"
@@ -86,6 +91,7 @@ init_config() {
     local current_projects_dir="${VAIBHAV_PROJECTS_DIR:-}"
     local current_desktop_host="${VAIBHAV_DESKTOP_HOST:-}"
     local current_ssh_host="${VAIBHAV_SSH_HOST:-desktop}"
+    local current_mosh_no_init="${VAIBHAV_MOSH_NO_INIT:-true}"
 
     # Projects directory
     local default_projects_dir="${current_projects_dir:-$HOME/projects}"
@@ -119,6 +125,7 @@ VAIBHAV_PROJECTS_DIR="${projects_dir}"
 VAIBHAV_DESKTOP_HOST="${desktop_host}"
 VAIBHAV_SSH_HOST="${ssh_host}"
 VAIBHAV_USE_MOSH="${use_mosh}"
+VAIBHAV_MOSH_NO_INIT="${current_mosh_no_init}"
 EOF
 
     echo ""
