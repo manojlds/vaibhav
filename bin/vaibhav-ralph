@@ -317,10 +317,56 @@ write_config() {
 # --- Init command ---
 ralph_init() {
     local dir="${1:-$(pwd)}"
-    dir=$(cd "$dir" 2>/dev/null && pwd)
+    local no_agent=false
+
+    # Parse flags
+    for arg in "$@"; do
+        case "$arg" in
+            --no-agent) no_agent=true ;;
+        esac
+    done
+
+    dir=$(cd "${dir}" 2>/dev/null && pwd)
 
     echo -e "${BOLD}vaibhav ralph init${NC}"
-    echo -e "${DIM}Scanning ${dir}${NC}"
+    echo -e "${DIM}Initializing ${dir}${NC}"
+    echo ""
+
+    # Install skills to project
+    copy_skills_to_project "$dir"
+    echo ""
+
+    # If agent-mode available and not --no-agent, use the vaibhav-init skill
+    if [[ "$no_agent" == "false" ]]; then
+        local engine="amp"
+        local existing_config=""
+        if [[ -f "$dir/$RALPH_CONFIG_FILE" ]]; then
+            engine=$(read_config_value "$dir/$RALPH_CONFIG_FILE" "engine")
+            engine="${engine:-amp}"
+        else
+            echo -e "  ${BOLD}Default AI engine:${NC}"
+            echo -e "    1) amp"
+            echo -e "    2) claude"
+            echo -e "    3) opencode"
+            read -rp "  Choose [1]: " engine_choice
+            case "${engine_choice:-1}" in
+                2) engine="claude" ;;
+                3) engine="opencode" ;;
+                *) engine="amp" ;;
+            esac
+        fi
+
+        echo -e "  ${DIM}Engine: ${engine}${NC}"
+        echo -e "  ${DIM}Invoking vaibhav-init skill...${NC}"
+        echo ""
+
+        local prompt="Load vaibhav-init skill and initialize this project."
+        (cd "$dir" && dispatch_to_engine "$engine" "$prompt") || true
+        return
+    fi
+
+    # --no-agent fallback: static detection (original logic)
+    echo -e "${DIM}Running static detection (--no-agent mode)${NC}"
     echo ""
 
     local existing_config=""
@@ -577,6 +623,123 @@ get_prompts_dir() {
     echo "$(dirname "$(dirname "$script_path")")/prompts"
 }
 
+# --- Resolve skills source dir (in vaibhav install) ---
+get_skills_source_dir() {
+    local script_path
+    script_path="$(readlink -f "$0")"
+    echo "$(dirname "$(dirname "$script_path")")/skills"
+}
+
+# --- Copy skills to project's .agents/skills/ ---
+copy_skills_to_project() {
+    local dir="$1"
+    local source_dir
+    source_dir=$(get_skills_source_dir)
+
+    if [[ ! -d "$source_dir" ]]; then
+        echo -e "  ${YELLOW}!${NC} Skills source not found at ${source_dir}"
+        return 1
+    fi
+
+    local target_dir="$dir/.agents/skills"
+    mkdir -p "$target_dir"
+
+    local count=0
+    for skill_dir in "$source_dir"/vaibhav-*/; do
+        [[ -d "$skill_dir" ]] || continue
+        local skill_name
+        skill_name=$(basename "$skill_dir")
+        cp -r "$skill_dir" "$target_dir/"
+        count=$((count + 1))
+    done
+
+    echo -e "  ${GREEN}✓${NC} Installed ${count} skills to ${CYAN}.agents/skills/${NC}"
+}
+
+# --- Check if skills are installed in project ---
+skills_installed() {
+    local dir="$1"
+    [[ -f "$dir/.agents/skills/vaibhav-loop/SKILL.md" ]]
+}
+
+# --- Dispatch prompt to engine ---
+dispatch_to_engine() {
+    local engine="$1"
+    local prompt="$2"
+    case "$engine" in
+        amp)
+            echo "$prompt" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr
+            ;;
+        claude)
+            echo "$prompt" | claude --dangerously-skip-permissions --print 2>&1 | tee /dev/stderr
+            ;;
+        opencode)
+            opencode run "$prompt" 2>&1 | tee /dev/stderr
+            ;;
+        *)
+            echo -e "${RED}Error:${NC} Unknown engine '$engine'" >&2
+            return 1
+            ;;
+    esac
+}
+
+# --- ralph check: deterministic quality gate ---
+ralph_check() {
+    local dir
+    dir=$(find_config_dir)
+    if [[ -z "$dir" ]]; then
+        echo -e "${RED}Error:${NC} No .vaibhav/config.yaml found. Run 'vaibhav ralph init' first."
+        exit 1
+    fi
+
+    local config="$dir/$RALPH_CONFIG_FILE"
+
+    echo -e "${BOLD}vaibhav ralph check${NC}"
+    echo ""
+
+    local failed=false
+    local steps=("lint" "typecheck" "test" "build")
+
+    for step in "${steps[@]}"; do
+        local cmd
+        cmd=$(read_config_value "$config" "commands.${step}")
+        if [[ -z "$cmd" ]]; then
+            echo -e "  ${DIM}⊘ ${step}: not configured${NC}"
+            continue
+        fi
+
+        echo -e "  ${BOLD}▸ ${step}:${NC} ${DIM}${cmd}${NC}"
+        if (cd "$dir" && eval "$cmd") >/dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ ${step} passed${NC}"
+        else
+            echo -e "  ${RED}✗ ${step} failed${NC}"
+            failed=true
+            break
+        fi
+    done
+
+    echo ""
+    if [[ "$failed" == "true" ]]; then
+        echo -e "${RED}${BOLD}Check failed.${NC}"
+        exit 1
+    else
+        echo -e "${GREEN}${BOLD}All checks passed.${NC}"
+    fi
+}
+
+# --- ralph update-skills: copy skills to project ---
+ralph_update_skills() {
+    local dir
+    dir=$(find_config_dir)
+    if [[ -z "$dir" ]]; then
+        echo -e "${RED}Error:${NC} No .vaibhav/config.yaml found. Run 'vaibhav ralph init' first."
+        exit 1
+    fi
+
+    echo -e "${BOLD}vaibhav ralph update-skills${NC}"
+    copy_skills_to_project "$dir"
+}
+
 # --- Build ralph prompt from template + config ---
 build_prompt() {
     local dir="$1"
@@ -673,7 +836,8 @@ ralph_prd_create() {
         echo -e "${RED}Usage:${NC} vaibhav ralph prd create <feature-name> [\"description of what to build\"]"
         exit 1
     fi
-    local description="${2:-}"
+    shift
+    local description="$*"
 
     local dir
     dir=$(find_config_dir)
@@ -687,38 +851,8 @@ ralph_prd_create() {
     engine=$(read_config_value "$config" "engine")
     engine="${engine:-amp}"
 
-    local prompts_dir
-    prompts_dir=$(get_prompts_dir)
-    local skill_file="$prompts_dir/prd-skill.md"
-
-    if [[ ! -f "$skill_file" ]]; then
-        echo -e "${RED}Error:${NC} PRD skill not found at $skill_file"
-        exit 1
-    fi
-
     # Create tasks dir
     mkdir -p "$dir/tasks"
-
-    local skill_content
-    skill_content=$(cat "$skill_file")
-
-    local feature_section="## Feature to write PRD for: ${name}"
-    if [[ -n "$description" ]]; then
-        feature_section+="
-
-### Description
-${description}"
-    fi
-
-    local prompt="$skill_content
-
----
-
-${feature_section}
-
-Create a PRD for this feature. Save it to tasks/prd-${name}.md
-
-Ask me clarifying questions first before writing the PRD."
 
     echo -e "${BOLD}vaibhav ralph prd create${NC}"
     echo -e "  Feature:  ${CYAN}${name}${NC}"
@@ -727,21 +861,39 @@ Ask me clarifying questions first before writing the PRD."
     echo -e "  Output:   ${CYAN}tasks/prd-${name}.md${NC}"
     echo ""
 
-    case "$engine" in
-        amp)
-            echo "$prompt" | amp --dangerously-allow-all 2>&1
-            ;;
-        claude)
-            echo "$prompt" | claude --dangerously-skip-permissions --print 2>&1
-            ;;
-        opencode)
-            echo "$prompt" | opencode 2>&1
-            ;;
-        *)
-            echo -e "${RED}Error:${NC} Unknown engine '$engine'"
+    local prompt
+    if skills_installed "$dir"; then
+        prompt="Load vaibhav-prd skill. Create a PRD for: ${name}."
+        [[ -n "$description" ]] && prompt+=" Description: ${description}."
+        prompt+=" Save it to tasks/prd-${name}.md. Ask me clarifying questions first before writing the PRD."
+    else
+        # Fallback: use old prompts/ file
+        local prompts_dir
+        prompts_dir=$(get_prompts_dir)
+        local skill_file="$prompts_dir/prd-skill.md"
+
+        if [[ ! -f "$skill_file" ]]; then
+            echo -e "${RED}Error:${NC} PRD skill not found. Run 'vaibhav ralph update-skills' first."
             exit 1
-            ;;
-    esac
+        fi
+
+        local skill_content
+        skill_content=$(cat "$skill_file")
+        local feature_section="## Feature to write PRD for: ${name}"
+        [[ -n "$description" ]] && feature_section+=$'\n\n### Description\n'"${description}"
+
+        prompt="$skill_content
+
+---
+
+${feature_section}
+
+Create a PRD for this feature. Save it to tasks/prd-${name}.md
+
+Ask me clarifying questions first before writing the PRD."
+    fi
+
+    (cd "$dir" && dispatch_to_engine "$engine" "$prompt") || true
 
     if [[ -f "$dir/tasks/prd-${name}.md" ]]; then
         echo ""
@@ -779,22 +931,32 @@ ralph_prd_convert() {
     engine=$(read_config_value "$config" "engine")
     engine="${engine:-amp}"
 
-    local prompts_dir
-    prompts_dir=$(get_prompts_dir)
-    local convert_file="$prompts_dir/prd-convert.md"
+    echo -e "${BOLD}vaibhav ralph prd convert${NC}"
+    echo -e "  Input:   ${CYAN}${file}${NC}"
+    echo -e "  Engine:  ${CYAN}${engine}${NC}"
+    echo -e "  Output:  ${CYAN}prd.json${NC}"
+    echo ""
 
-    if [[ ! -f "$convert_file" ]]; then
-        echo -e "${RED}Error:${NC} Convert prompt not found at $convert_file"
-        exit 1
-    fi
+    local prompt
+    if skills_installed "$dir"; then
+        prompt="Load vaibhav-convert skill. Convert ${file} to prd.json. Write the output to prd.json in the project root."
+    else
+        # Fallback: use old prompts/ file
+        local prompts_dir
+        prompts_dir=$(get_prompts_dir)
+        local convert_file="$prompts_dir/prd-convert.md"
 
-    local prd_content
-    prd_content=$(cat "$file")
+        if [[ ! -f "$convert_file" ]]; then
+            echo -e "${RED}Error:${NC} Convert prompt not found. Run 'vaibhav ralph update-skills' first."
+            exit 1
+        fi
 
-    local convert_prompt
-    convert_prompt=$(cat "$convert_file")
+        local prd_content
+        prd_content=$(cat "$file")
+        local convert_prompt
+        convert_prompt=$(cat "$convert_file")
 
-    local prompt="$convert_prompt
+        prompt="$convert_prompt
 
 ---
 
@@ -805,28 +967,9 @@ $prd_content
 ---
 
 Write the output to prd.json in the project root."
+    fi
 
-    echo -e "${BOLD}vaibhav ralph prd convert${NC}"
-    echo -e "  Input:   ${CYAN}${file}${NC}"
-    echo -e "  Engine:  ${CYAN}${engine}${NC}"
-    echo -e "  Output:  ${CYAN}prd.json${NC}"
-    echo ""
-
-    case "$engine" in
-        amp)
-            echo "$prompt" | amp --dangerously-allow-all 2>&1
-            ;;
-        claude)
-            echo "$prompt" | claude --dangerously-skip-permissions --print 2>&1
-            ;;
-        opencode)
-            echo "$prompt" | opencode 2>&1
-            ;;
-        *)
-            echo -e "${RED}Error:${NC} Unknown engine '$engine'"
-            exit 1
-            ;;
-    esac
+    (cd "$dir" && dispatch_to_engine "$engine" "$prompt") || true
 
     if [[ -f "$dir/prd.json" ]]; then
         echo ""
@@ -1033,9 +1176,14 @@ ralph_run() {
         echo "---" >> "$progress"
     fi
 
-    # Build the prompt
-    local prompt
-    prompt=$(build_prompt "$dir")
+    # Build the prompt — use skill if installed, fallback to build_prompt()
+    local prompt use_skill=false
+    if skills_installed "$dir"; then
+        use_skill=true
+        prompt="Load vaibhav-loop skill. Execute next story."
+    else
+        prompt=$(build_prompt "$dir")
+    fi
 
     if [[ "$dry_run" == "true" ]]; then
         echo -e "${BOLD}vaibhav ralph run ${DIM}(dry run)${NC}"
@@ -1043,6 +1191,7 @@ ralph_run() {
         echo -e "  Engine:      ${CYAN}${engine}${NC}"
         echo -e "  Iterations:  ${CYAN}${max_iterations}${NC}"
         echo -e "  PRD:         ${CYAN}${prd}${NC}"
+        echo -e "  Mode:        ${CYAN}$(if [[ "$use_skill" == "true" ]]; then echo "skill"; else echo "template"; fi)${NC}"
         echo ""
         echo -e "${BOLD}Prompt that would be sent:${NC}"
         echo "---"
@@ -1055,6 +1204,7 @@ ralph_run() {
     echo -e "  Project:     ${CYAN}$(read_config_value "$config" "project.name")${NC}"
     echo -e "  Engine:      ${CYAN}${engine}${NC}"
     echo -e "  Iterations:  ${CYAN}max ${max_iterations}${NC}"
+    echo -e "  Mode:        ${CYAN}$(if [[ "$use_skill" == "true" ]]; then echo "skill"; else echo "template"; fi)${NC}"
     echo ""
 
     for i in $(seq 1 "$max_iterations"); do
@@ -1064,21 +1214,7 @@ ralph_run() {
         echo "==============================================================="
 
         local output=""
-        case "$engine" in
-            amp)
-                output=$(echo "$prompt" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
-                ;;
-            claude)
-                output=$(echo "$prompt" | claude --dangerously-skip-permissions --print 2>&1 | tee /dev/stderr) || true
-                ;;
-            opencode)
-                output=$(echo "$prompt" | opencode 2>&1 | tee /dev/stderr) || true
-                ;;
-            *)
-                echo -e "${RED}Error:${NC} Unknown engine '$engine'"
-                exit 1
-                ;;
-        esac
+        output=$(cd "$dir" && dispatch_to_engine "$engine" "$prompt") || true
 
         # Check for completion signal
         if echo "$output" | grep -q "<promise>COMPLETE</promise>"; then
@@ -1148,7 +1284,7 @@ $(echo -e "$rules")
             echo "$prompt" | claude --dangerously-skip-permissions --print 2>&1
             ;;
         opencode)
-            echo "$prompt" | opencode 2>&1
+            opencode run "$prompt" 2>&1
             ;;
         *)
             echo -e "${RED}Error:${NC} Unknown engine '$engine'"
@@ -1162,9 +1298,12 @@ ralph_help() {
     echo -e "${BOLD}vaibhav ralph${NC} — Ralph loop utility for AI-driven development"
     echo ""
     echo -e "${BOLD}Setup:${NC}"
-    echo "  vaibhav ralph init [dir]           Auto-detect project and create .vaibhav/config.yaml"
+    echo "  vaibhav ralph init [dir]           Initialize project (installs skills, runs AI detection)"
+    echo "  vaibhav ralph init --no-agent      Initialize with static detection only (no AI)"
     echo "  vaibhav ralph config               Show current project config"
     echo "  vaibhav ralph add-rule \"rule\"       Add a rule to the project config"
+    echo "  vaibhav ralph update-skills         Update skills in current project"
+    echo "  vaibhav ralph check                Run quality checks (lint → typecheck → test → build)"
     echo ""
     echo -e "${BOLD}PRD:${NC}"
     echo "  vaibhav ralph prd create <name> [\"desc\"]  Write a PRD with AI assistance"
@@ -1200,7 +1339,14 @@ case "${1:-}" in
         ralph_help
         ;;
     init)
-        ralph_init "${2:-}"
+        shift
+        ralph_init "$@"
+        ;;
+    check)
+        ralph_check
+        ;;
+    update-skills)
+        ralph_update_skills
         ;;
     config)
         ralph_config

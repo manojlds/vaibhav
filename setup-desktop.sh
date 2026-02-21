@@ -38,6 +38,16 @@ fi
 ln -sf "$SCRIPT_DIR/tmux.conf" ~/.tmux.conf
 ok "~/.tmux.conf → $SCRIPT_DIR/tmux.conf"
 
+if tmux ls &>/dev/null; then
+    if tmux source-file ~/.tmux.conf &>/dev/null; then
+        ok "Reloaded tmux config in running server"
+    else
+        warn "Could not reload tmux config automatically (reload manually with: tmux source-file ~/.tmux.conf)"
+    fi
+else
+    skip "tmux server not running (config applies on next start)"
+fi
+
 # --- SSH server ---
 step "Checking SSH server"
 if systemctl is-active --quiet sshd 2>/dev/null || systemctl is-active --quiet ssh 2>/dev/null; then

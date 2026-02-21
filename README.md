@@ -147,3 +147,5 @@ vaibhav/
 - **Termux extra keys**: Swipe from the left edge to toggle the extra keyboard row with `ESC`, `CTRL`, `ALT`, `TAB`, and common coding symbols
 - **Pinch to zoom** in Termux to adjust text size for comfortable reading on your phone
 - **FiraCode Nerd Font** is installed during Termux setup for proper icon rendering (starship, etc.)
+- **Clipboard from tmux**: Use copy mode (`Ctrl+b` then `[` or `Alt+u`), select, then `Enter` or `y`; vaibhav's tmux config sends copied text to your local clipboard via OSC 52
+- **After updating tmux.conf**: If tmux is already running, reload once with `tmux source-file ~/.tmux.conf`

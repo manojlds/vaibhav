@@ -4,6 +4,19 @@ Autonomous AI-driven development loop built into vaibhav. Write a PRD, break it 
 
 Based on the [Ralph pattern](https://ghuntley.com/ralph/) — each iteration spawns a fresh AI instance that picks up the next incomplete story, implements it, runs quality checks, commits, and moves on.
 
+## Architecture
+
+Ralph uses **skills** (`.agents/skills/`) for all intelligent work. The CLI commands are thin wrappers that invoke skills via your chosen AI engine (amp, claude, opencode). Skills are engine-agnostic — any tool that discovers `.agents/skills/` can use them directly without the vaibhav CLI.
+
+| Skill | Purpose |
+|-------|---------|
+| `vaibhav-init` | Agentic project scanner — detects commands/rules, generates config, bootstraps agents.md, sets up prek hooks |
+| `vaibhav-prd` | PRD generator — asks clarifying questions, writes structured PRDs |
+| `vaibhav-convert` | PRD → prd.json converter — ensures stories are right-sized and dependency-ordered |
+| `vaibhav-loop` | Per-iteration loop instructions — reads config.yaml directly for commands and rules |
+
+Skills are installed to your project's `.agents/skills/` during `vaibhav ralph init` and updated via `vaibhav ralph update-skills` or `vaibhav update`.
+
 ```
 PRD → prd.json → Ralph Loop → Done
                     ↓
@@ -29,7 +42,7 @@ vaibhav ralph run                           # 4. Start the loop
 
 ## Step 1: Initialize project config
 
-Auto-detects your project's language, framework, and commands (test/lint/build/typecheck). Creates `.vaibhav/config.yaml`.
+Installs skills to `.agents/skills/`, then invokes the `vaibhav-init` skill via your AI engine. The skill interactively scans your project, confirms detected commands, generates `.vaibhav/config.yaml`, bootstraps `agents.md`, sets up prek pre-commit hooks, and updates `.gitignore`.
 
 **Desktop** (from the project directory):
 
@@ -44,26 +57,18 @@ vaibhav ralph init
 vaibhav ralph -p myapp init
 ```
 
+**Static detection fallback** (no AI engine needed):
+
+```bash
+vaibhav ralph init --no-agent
+```
+
 **What it does:**
 
-- Scans for `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, etc.
-- Detects language, framework, and available scripts
+- Copies vaibhav skills to `.agents/skills/`
+- Invokes the `vaibhav-init` skill via your AI engine (interactive detection, config generation, prek hooks, agents.md bootstrap, .gitignore update)
+- With `--no-agent`: falls back to static detection (grep-based scanning of package.json, pyproject.toml, etc.)
 - Asks you to pick a default AI engine (amp, claude, opencode)
-- Writes `.vaibhav/config.yaml`
-
-**Example output:**
-
-```
-vaibhav ralph init
-Scanning /home/user/projects/myapp
-
-  ✓ Language:   TypeScript
-  ✓ Framework:  Next.js
-  ✓ Test:       npm run test
-  ✓ Lint:       npm run lint
-  ✓ Build:      npm run build
-  ✓ Typecheck:  npx tsc --noEmit
-```
 
 ### Add rules
 
@@ -306,6 +311,7 @@ These files live in your project root:
 | File | Purpose |
 |------|---------|
 | `.vaibhav/config.yaml` | Project config (language, commands, rules, boundaries) |
+| `.agents/skills/vaibhav-*` | Installed skills (engine-agnostic, discoverable by amp/claude/opencode) |
 | `tasks/prd-*.md` | PRD markdown files |
 | `prd.json` | Active task queue with story completion status |
 | `progress.txt` | Append-only log of learnings from each iteration |
@@ -340,9 +346,12 @@ All commands support `-p <project>` to target a registered project from anywhere
 
 | Command | Description |
 |---------|-------------|
-| `vaibhav ralph init [dir]` | Auto-detect project, create config |
+| `vaibhav ralph init [dir]` | Initialize project (install skills, run AI detection) |
+| `vaibhav ralph init --no-agent` | Initialize with static detection only (no AI) |
 | `vaibhav ralph config` | Show current config |
 | `vaibhav ralph add-rule "rule"` | Add a project rule |
+| `vaibhav ralph update-skills` | Update skills in current project from vaibhav install |
+| `vaibhav ralph check` | Run quality checks (lint → typecheck → test → build) |
 
 ### PRD
 

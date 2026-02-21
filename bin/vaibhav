@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.4.5"
+VAIBHAV_VERSION="0.5.0"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -728,6 +728,26 @@ update_desktop() {
     new_version=$(grep '^VAIBHAV_VERSION=' "$vaibhav_bin" | cut -d'"' -f2)
 
     echo -e "${GREEN}✓${NC} Updated: v${old_version} → v${new_version}"
+
+    # Update skills in any initialized projects
+    local skills_source="$repo_dir/skills"
+    if [[ -d "$skills_source" && -s "$PROJECTS_FILE" ]]; then
+        local updated=0
+        while IFS='=' read -r name path; do
+            [[ -z "$name" || "$name" == \#* ]] && continue
+            if [[ -d "$path/.agents/skills/vaibhav-loop" ]]; then
+                local target="$path/.agents/skills"
+                for skill_dir in "$skills_source"/vaibhav-*/; do
+                    [[ -d "$skill_dir" ]] && cp -r "$skill_dir" "$target/"
+                done
+                updated=$((updated + 1))
+            fi
+        done < "$PROJECTS_FILE"
+        if [[ $updated -gt 0 ]]; then
+            echo -e "${GREEN}✓${NC} Updated skills in ${updated} project(s)"
+        fi
+    fi
+
     return 0
 }
 
