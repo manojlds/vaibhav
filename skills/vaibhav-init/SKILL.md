@@ -295,7 +295,6 @@ Append the following entries to `.gitignore` if they're not already present:
 # vaibhav ralph
 prd.json
 progress.txt
-.vaibhav/
 .last-branch
 ```
 

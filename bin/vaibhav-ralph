@@ -314,6 +314,95 @@ write_config() {
     } > "$dir/$RALPH_CONFIG_FILE"
 }
 
+# --- Uninstall command ---
+ralph_uninstall() {
+    local dir="${1:-$(pwd)}"
+    dir=$(cd "${dir}" 2>/dev/null && pwd)
+
+    echo -e "${BOLD}vaibhav ralph uninstall${NC}"
+    echo -e "${DIM}Cleaning up ${dir}${NC}"
+    echo ""
+
+    local removed=0
+
+    # .vaibhav/ config dir
+    if [[ -d "$dir/$RALPH_CONFIG_DIR" ]]; then
+        rm -rf "$dir/$RALPH_CONFIG_DIR"
+        echo -e "  ${GREEN}✓${NC} Removed ${CYAN}$RALPH_CONFIG_DIR/${NC}"
+        removed=$((removed + 1))
+    fi
+
+    # Installed skills
+    if [[ -d "$dir/.agents/skills" ]]; then
+        local skill_count=0
+        for skill_dir in "$dir/.agents/skills"/vaibhav-*/; do
+            [[ -d "$skill_dir" ]] || continue
+            rm -rf "$skill_dir"
+            skill_count=$((skill_count + 1))
+        done
+        if [[ $skill_count -gt 0 ]]; then
+            echo -e "  ${GREEN}✓${NC} Removed ${skill_count} vaibhav skills from ${CYAN}.agents/skills/${NC}"
+            removed=$((removed + 1))
+        fi
+        # Remove .agents/skills/ if empty
+        rmdir "$dir/.agents/skills" 2>/dev/null && rmdir "$dir/.agents" 2>/dev/null || true
+    fi
+
+    # prd.json and progress.txt
+    for f in prd.json progress.txt; do
+        if [[ -f "$dir/$f" ]]; then
+            rm "$dir/$f"
+            echo -e "  ${GREEN}✓${NC} Removed ${CYAN}$f${NC}"
+            removed=$((removed + 1))
+        fi
+    done
+
+    # prek.toml if it only contains vaibhav hook
+    if [[ -f "$dir/prek.toml" ]] && grep -q "vaibhav ralph check" "$dir/prek.toml"; then
+        rm "$dir/prek.toml"
+        echo -e "  ${GREEN}✓${NC} Removed ${CYAN}prek.toml${NC}"
+        removed=$((removed + 1))
+    fi
+
+    # git pre-commit hook if it only runs vaibhav
+    if [[ -f "$dir/.git/hooks/pre-commit" ]] && grep -q "vaibhav ralph check" "$dir/.git/hooks/pre-commit"; then
+        local lines
+        lines=$(grep -cv '^\s*$\|^\s*#\|^#!/' "$dir/.git/hooks/pre-commit" 2>/dev/null || echo "0")
+        if [[ "$lines" -le 1 ]]; then
+            rm "$dir/.git/hooks/pre-commit"
+            echo -e "  ${GREEN}✓${NC} Removed ${CYAN}.git/hooks/pre-commit${NC}"
+            removed=$((removed + 1))
+        else
+            echo -e "  ${YELLOW}!${NC} .git/hooks/pre-commit contains other hooks — left in place"
+        fi
+    fi
+
+    # Clean .gitignore entries
+    if [[ -f "$dir/.gitignore" ]]; then
+        local cleaned=false
+        for entry in "prd.json" "progress.txt" ".last-branch" "# vaibhav ralph"; do
+            if grep -qF "$entry" "$dir/.gitignore"; then
+                grep -vF "$entry" "$dir/.gitignore" > "$dir/.gitignore.tmp" && mv "$dir/.gitignore.tmp" "$dir/.gitignore"
+                cleaned=true
+            fi
+        done
+        if [[ "$cleaned" == "true" ]]; then
+            # Remove trailing blank lines left behind
+            sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$dir/.gitignore" 2>/dev/null || true
+            echo -e "  ${GREEN}✓${NC} Cleaned vaibhav entries from ${CYAN}.gitignore${NC}"
+            removed=$((removed + 1))
+        fi
+    fi
+
+    echo ""
+    if [[ $removed -eq 0 ]]; then
+        echo -e "${DIM}Nothing to clean up.${NC}"
+    else
+        echo -e "${GREEN}Done.${NC} Removed $removed items."
+        echo -e "${DIM}Note: agents.md / CLAUDE.md left untouched — remove manually if desired.${NC}"
+    fi
+}
+
 # --- Init command ---
 ralph_init() {
     local dir="${1:-$(pwd)}"
@@ -666,15 +755,28 @@ skills_installed() {
 dispatch_to_engine() {
     local engine="$1"
     local prompt="$2"
+    local mode="${3:-interactive}"
     case "$engine" in
         amp)
-            echo "$prompt" | amp --dangerously-allow-all
+            if [[ "$mode" == "run" ]]; then
+                echo "$prompt" | amp --dangerously-allow-all --non-interactive
+            else
+                echo "$prompt" | amp --dangerously-allow-all
+            fi
             ;;
         claude)
-            echo "$prompt" | claude --dangerously-skip-permissions --print
+            if [[ "$mode" == "run" ]]; then
+                echo "$prompt" | claude --dangerously-skip-permissions --print
+            else
+                echo "$prompt" | claude --dangerously-skip-permissions
+            fi
             ;;
         opencode)
-            opencode run "$prompt"
+            if [[ "$mode" == "run" ]]; then
+                opencode run "$prompt"
+            else
+                opencode --prompt "$prompt"
+            fi
             ;;
         *)
             echo -e "${RED}Error:${NC} Unknown engine '$engine'" >&2
@@ -969,7 +1071,7 @@ $prd_content
 Write the output to prd.json in the project root."
     fi
 
-    (cd "$dir" && dispatch_to_engine "$engine" "$prompt") || true
+    (cd "$dir" && dispatch_to_engine "$engine" "$prompt" "run") || true
 
     if [[ -f "$dir/prd.json" ]]; then
         echo ""
@@ -1214,7 +1316,7 @@ ralph_run() {
         echo "==============================================================="
 
         local output=""
-        output=$(cd "$dir" && dispatch_to_engine "$engine" "$prompt") || true
+        output=$(cd "$dir" && dispatch_to_engine "$engine" "$prompt" "run") || true
 
         # Check for completion signal
         if echo "$output" | grep -q "<promise>COMPLETE</promise>"; then
@@ -1304,6 +1406,7 @@ ralph_help() {
     echo "  vaibhav ralph add-rule \"rule\"       Add a rule to the project config"
     echo "  vaibhav ralph update-skills         Update skills in current project"
     echo "  vaibhav ralph check                Run quality checks (lint → typecheck → test → build)"
+    echo "  vaibhav ralph uninstall            Remove vaibhav config, skills, and generated files"
     echo ""
     echo -e "${BOLD}PRD:${NC}"
     echo "  vaibhav ralph prd create <name> [\"desc\"]  Write a PRD with AI assistance"
@@ -1368,6 +1471,10 @@ case "${1:-}" in
         ;;
     status)
         ralph_status
+        ;;
+    uninstall)
+        shift
+        ralph_uninstall "$@"
         ;;
     *)
         echo -e "${RED}Unknown command:${NC} $1"
