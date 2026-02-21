@@ -668,13 +668,13 @@ dispatch_to_engine() {
     local prompt="$2"
     case "$engine" in
         amp)
-            echo "$prompt" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr
+            echo "$prompt" | amp --dangerously-allow-all
             ;;
         claude)
-            echo "$prompt" | claude --dangerously-skip-permissions --print 2>&1 | tee /dev/stderr
+            echo "$prompt" | claude --dangerously-skip-permissions --print
             ;;
         opencode)
-            opencode run "$prompt" 2>&1 | tee /dev/stderr
+            opencode run "$prompt"
             ;;
         *)
             echo -e "${RED}Error:${NC} Unknown engine '$engine'" >&2
