@@ -835,6 +835,127 @@ dispatch_to_engine() {
     esac
 }
 
+# --- Internal engine runner (used by worker tmux window) ---
+internal_engine_run() {
+    local engine=""
+    local prompt_file=""
+    local output_file=""
+    local done_file=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --engine)
+                engine="$2"
+                shift 2
+                ;;
+            --prompt-file)
+                prompt_file="$2"
+                shift 2
+                ;;
+            --output-file)
+                output_file="$2"
+                shift 2
+                ;;
+            --done-file)
+                done_file="$2"
+                shift 2
+                ;;
+            *)
+                echo -e "${RED}Error:${NC} Unknown option for __engine-run: $1" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    if [[ -z "$engine" || -z "$prompt_file" || -z "$output_file" || -z "$done_file" ]]; then
+        echo -e "${RED}Error:${NC} Missing required args for __engine-run" >&2
+        return 1
+    fi
+
+    if [[ ! -f "$prompt_file" ]]; then
+        echo -e "${RED}Error:${NC} Prompt file not found: $prompt_file" >&2
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$output_file")" "$(dirname "$done_file")"
+
+    local prompt
+    prompt=$(cat "$prompt_file")
+
+    set +e
+    dispatch_to_engine "$engine" "$prompt" "run" 2>&1 | tee "$output_file"
+    local status=${PIPESTATUS[0]}
+    set -e
+
+    echo "$status" > "$done_file"
+    return 0
+}
+
+ensure_worker_window() {
+    local session_name="$1"
+    local dir="$2"
+    local worker_window="agent"
+
+    if ! tmux list-windows -t "$session_name" -F "#{window_name}" | grep -qx "$worker_window"; then
+        tmux new-window -d -t "$session_name" -n "$worker_window" -c "$dir"
+    fi
+}
+
+show_progress_tail() {
+    local progress_file="$1"
+    local lines="${2:-12}"
+
+    echo -e "${BOLD}progress.txt${NC} ${DIM}(last ${lines} lines)${NC}"
+    if [[ -f "$progress_file" ]]; then
+        tail -n "$lines" "$progress_file" 2>/dev/null | sed 's/^/  /'
+    else
+        echo -e "  ${DIM}No progress yet${NC}"
+    fi
+}
+
+show_story_status_line() {
+    local prd_file="$1"
+
+    if [[ ! -f "$prd_file" ]]; then
+        return
+    fi
+
+    local status_line
+    status_line=$(python3 - "$prd_file" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+
+try:
+    with open(path) as f:
+        data = json.load(f)
+except Exception:
+    sys.exit(0)
+
+stories = data.get('userStories', [])
+done = sum(1 for s in stories if s.get('passes'))
+total = len(stories)
+
+next_story = next((s for s in stories if not s.get('passes')), None)
+if next_story is None:
+    print(f"Stories: {done}/{total} complete | Next: none")
+    sys.exit(0)
+
+sid = str(next_story.get('id', '?'))
+title = str(next_story.get('title', 'untitled')).replace('\n', ' ').strip()
+if len(title) > 60:
+    title = title[:57] + '...'
+
+print(f"Stories: {done}/{total} complete | Next: {sid} {title}")
+PY
+)
+
+    if [[ -n "$status_line" ]]; then
+        echo -e "${BOLD}status${NC} ${DIM}${status_line}${NC}"
+    fi
+}
+
 # --- ralph check: deterministic quality gate ---
 ralph_check() {
     local dir
@@ -1186,13 +1307,18 @@ ralph_run() {
     fi
 
     local config="$dir/$RALPH_CONFIG_FILE"
-    local engine max_iterations single_task dry_run no_tmux
+    local engine max_iterations single_task dry_run no_tmux project_name session_name active_tmux_session use_worker_window
     engine=$(read_config_value "$config" "engine")
     engine="${engine:-amp}"
     max_iterations=10
     single_task=""
     dry_run=false
     no_tmux=false
+    project_name=$(read_config_value "$config" "project.name")
+    project_name="${project_name:-$(basename "$dir")}"
+    session_name="ralph-${project_name}"
+    active_tmux_session="${VAIBHAV_RALPH_TMUX:-}"
+    use_worker_window=false
 
     # Parse args
     local run_args=()
@@ -1228,13 +1354,8 @@ ralph_run() {
 
     # Launch inside tmux unless --no-tmux, --dry-run, or already inside the ralph tmux session
     if [[ "$no_tmux" == "false" && "$dry_run" == "false" ]]; then
-        local project_name
-        project_name=$(read_config_value "$config" "project.name")
-        project_name="${project_name:-$(basename "$dir")}"
-        local session_name="ralph-${project_name}"
-
         # If already inside this ralph tmux session, continue without re-wrapping
-        if [[ "${VAIBHAV_RALPH_TMUX:-}" != "$session_name" ]]; then
+        if [[ "$active_tmux_session" != "$session_name" ]]; then
             if tmux has-session -t "$session_name" 2>/dev/null; then
                 echo -e "${BOLD}Ralph is already running${NC} in tmux session ${CYAN}${session_name}${NC}"
                 echo -e "  Attach with: ${CYAN}tmux attach -t ${session_name}${NC}"
@@ -1269,6 +1390,11 @@ ralph_run() {
             fi
             return
         fi
+    fi
+
+    if [[ -n "$active_tmux_session" && "$active_tmux_session" == "$session_name" ]] && tmux has-session -t "$active_tmux_session" 2>/dev/null; then
+        use_worker_window=true
+        ensure_worker_window "$active_tmux_session" "$dir"
     fi
 
     # Single task mode (no PRD needed)
@@ -1357,7 +1483,17 @@ ralph_run() {
     echo -e "  Engine:      ${CYAN}${engine}${NC}"
     echo -e "  Iterations:  ${CYAN}max ${max_iterations}${NC}"
     echo -e "  Mode:        ${CYAN}$(if [[ "$use_skill" == "true" ]]; then echo "skill"; else echo "template"; fi)${NC}"
+    if [[ "$use_worker_window" == "true" ]]; then
+        echo -e "  Worker:      ${CYAN}${active_tmux_session}:agent${NC}"
+        echo -e "  Live output: ${DIM}tmux select-window -t ${active_tmux_session}:agent${NC}"
+    fi
     echo ""
+
+    show_story_status_line "$prd"
+    show_progress_tail "$progress" 10
+
+    local runtime_dir="$dir/.vaibhav/runtime"
+    mkdir -p "$runtime_dir"
 
     for i in $(seq 1 "$max_iterations"); do
         echo ""
@@ -1366,10 +1502,56 @@ ralph_run() {
         echo "==============================================================="
 
         local output=""
-        output=$(cd "$dir" && dispatch_to_engine "$engine" "$prompt" "run") || true
+        local is_complete=false
+
+        if [[ "$use_worker_window" == "true" ]]; then
+            local prompt_file output_file done_file script_path worker_cmd
+            prompt_file="$runtime_dir/iter-${i}.prompt.txt"
+            output_file="$runtime_dir/iter-${i}.output.log"
+            done_file="$runtime_dir/iter-${i}.done"
+
+            printf "%s" "$prompt" > "$prompt_file"
+            rm -f "$output_file" "$done_file"
+
+            script_path=$(readlink -f "$0")
+            worker_cmd="cd $(printf '%q' "$dir") && $(printf '%q' "$script_path") __engine-run --engine $(printf '%q' "$engine") --prompt-file $(printf '%q' "$prompt_file") --output-file $(printf '%q' "$output_file") --done-file $(printf '%q' "$done_file")"
+
+            tmux send-keys -t "${active_tmux_session}:agent" C-c
+            tmux send-keys -t "${active_tmux_session}:agent" "clear" C-m
+            tmux send-keys -t "${active_tmux_session}:agent" "$worker_cmd" C-m
+
+            local started_at now elapsed
+            started_at=$(date +%s)
+            while [[ ! -f "$done_file" ]]; do
+                now=$(date +%s)
+                elapsed=$((now - started_at))
+                printf "\r  Running in worker window (${active_tmux_session}:agent) ... %ss" "$elapsed"
+                sleep 2
+            done
+            printf "\n"
+
+            local engine_status
+            engine_status=$(cat "$done_file" 2>/dev/null || echo "1")
+            if [[ "$engine_status" != "0" ]]; then
+                echo -e "  ${YELLOW}Worker exited with status ${engine_status}. Continuing...${NC}"
+            fi
+
+            if [[ -f "$output_file" ]] && grep -q "<promise>COMPLETE</promise>" "$output_file"; then
+                is_complete=true
+            fi
+        else
+            output=$(cd "$dir" && dispatch_to_engine "$engine" "$prompt" "run") || true
+            if echo "$output" | grep -q "<promise>COMPLETE</promise>"; then
+                is_complete=true
+            fi
+        fi
+
+        echo ""
+        show_story_status_line "$prd"
+        show_progress_tail "$progress" 10
 
         # Check for completion signal
-        if echo "$output" | grep -q "<promise>COMPLETE</promise>"; then
+        if [[ "$is_complete" == "true" ]]; then
             echo ""
             echo -e "${GREEN}${BOLD}Ralph completed all tasks!${NC}"
             echo "Completed at iteration $i of $max_iterations"
@@ -1377,7 +1559,7 @@ ralph_run() {
         fi
 
         echo "Iteration $i complete. Continuing..."
-        sleep 2
+        sleep 1
     done
 
     echo ""
@@ -1474,6 +1656,7 @@ ralph_help() {
     echo "  vaibhav ralph run --max-iterations 5"
     echo "  vaibhav ralph run --no-tmux        Run directly without tmux wrapping"
     echo "  vaibhav ralph status               Show PRD progress"
+    echo -e "  ${DIM}(tmux mode: main window shows progress, agent window streams live output)${NC}"
     echo ""
     echo -e "${BOLD}Options:${NC}"
     echo "  -p, --project <name>         Target a registered project (for remote use)"
@@ -1521,6 +1704,10 @@ case "${1:-}" in
     run)
         shift
         ralph_run "$@"
+        ;;
+    __engine-run)
+        shift
+        internal_engine_run "$@"
         ;;
     status)
         ralph_status
