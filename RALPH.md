@@ -6,11 +6,11 @@ Based on the [Ralph pattern](https://ghuntley.com/ralph/) — each iteration spa
 
 ## Architecture
 
-Ralph uses **skills** (`.agents/skills/`) for all intelligent work. The CLI commands are thin wrappers that invoke skills via your chosen AI engine (amp, claude, opencode). Skills are engine-agnostic — any tool that discovers `.agents/skills/` can use them directly without the vaibhav CLI.
+Ralph uses **skills** (`.agents/skills/`) for all intelligent work. The CLI commands are thin wrappers that invoke skills via your chosen AI engine (amp, claude, opencode, pi). Skills are engine-agnostic — any tool that discovers `.agents/skills/` can use them directly without the vaibhav CLI.
 
 | Skill | Purpose |
 |-------|---------|
-| `vaibhav-init` | Agentic project scanner — detects commands/rules, generates config, bootstraps agents.md, sets up prek hooks |
+| `vaibhav-init` | Agentic project scanner — detects commands/rules, generates config, bootstraps engine guidance files (`AGENTS.md`/`CLAUDE.md`), sets up prek hooks |
 | `vaibhav-prd` | PRD generator — asks clarifying questions, writes structured PRDs |
 | `vaibhav-convert` | PRD → prd.json converter — ensures stories are right-sized and dependency-ordered |
 | `vaibhav-loop` | Per-iteration loop instructions — reads config.yaml directly for commands and rules |
@@ -42,7 +42,7 @@ vaibhav ralph run                           # 4. Start the loop
 
 ## Step 1: Initialize project config
 
-Installs skills to `.agents/skills/`, then invokes the `vaibhav-init` skill via your AI engine. The skill interactively scans your project, confirms detected commands, generates `.vaibhav/config.yaml`, bootstraps `agents.md`, sets up prek pre-commit hooks, and updates `.gitignore`.
+Installs skills to `.agents/skills/`, then invokes the `vaibhav-init` skill via your AI engine. The skill interactively scans your project, confirms detected commands, generates `.vaibhav/config.yaml`, bootstraps engine guidance files (`AGENTS.md`/`CLAUDE.md`), sets up prek pre-commit hooks, and updates `.gitignore`.
 
 **Desktop** (from the project directory):
 
@@ -66,9 +66,9 @@ vaibhav ralph init --no-agent
 **What it does:**
 
 - Copies vaibhav skills to `.agents/skills/`
-- Invokes the `vaibhav-init` skill via your AI engine (interactive detection, config generation, prek hooks, agents.md bootstrap, .gitignore update)
+- Invokes the `vaibhav-init` skill via your AI engine (interactive detection, config generation, prek hooks, guidance-file bootstrap, .gitignore update)
 - With `--no-agent`: falls back to static detection (grep-based scanning of package.json, pyproject.toml, etc.)
-- Asks you to pick a default AI engine (amp, claude, opencode)
+- Asks you to pick a default AI engine (amp, claude, opencode, pi)
 
 ### Add rules
 
@@ -209,13 +209,13 @@ vaibhav ralph -p myapp run
 
 ```bash
 # Override engine
-vaibhav ralph run --engine claude
+vaibhav ralph run --engine pi
 
 # Limit iterations
 vaibhav ralph run --max-iterations 5
 
 # From phone with options
-vaibhav ralph -p myapp run --engine claude --max-iterations 3
+vaibhav ralph -p myapp run --engine pi --max-iterations 3
 
 # Preview the prompt without running
 vaibhav ralph run --dry-run
@@ -311,7 +311,7 @@ These files live in your project root:
 | File | Purpose |
 |------|---------|
 | `.vaibhav/config.yaml` | Project config (language, commands, rules, boundaries) |
-| `.agents/skills/vaibhav-*` | Installed skills (engine-agnostic, discoverable by amp/claude/opencode) |
+| `.agents/skills/vaibhav-*` | Installed skills (engine-agnostic, discoverable by amp/claude/opencode/pi) |
 | `tasks/prd-*.md` | PRD markdown files |
 | `prd.json` | Active task queue with story completion status |
 | `progress.txt` | Append-only log of learnings from each iteration |
@@ -368,7 +368,7 @@ All commands support `-p <project>` to target a registered project from anywhere
 | `vaibhav ralph run` | Start the ralph loop |
 | `vaibhav ralph run "task"` | Single task mode |
 | `vaibhav ralph run --dry-run` | Preview prompt |
-| `vaibhav ralph run --engine claude` | Override AI engine |
+| `vaibhav ralph run --engine pi` | Override AI engine |
 | `vaibhav ralph run --max-iterations N` | Cap iterations |
 | `vaibhav ralph status` | Show story progress |
 

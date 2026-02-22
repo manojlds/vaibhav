@@ -12,7 +12,7 @@ Agentically scan a project to detect its language, framework, commands, and conv
 | File | Purpose |
 |------|---------|
 | `.vaibhav/config.yaml` | Ralph loop configuration (commands, rules, engine) |
-| `agents.md` or `CLAUDE.md` | Project conventions for the AI engine |
+| `AGENTS.md` or `CLAUDE.md` | Project conventions for the AI engine |
 | `prek.toml` or `.git/hooks/pre-commit` | Pre-commit hook running `vaibhav ralph check` |
 | `.gitignore` updates | Ignore ralph working files |
 
@@ -48,7 +48,7 @@ Read these files to understand the project (skip any that don't exist):
 - `.gitlab-ci.yml`
 
 **Existing agent guidance:**
-- `agents.md`, `AGENTS.md`
+- `AGENTS.md`
 - `CLAUDE.md`, `claude.md`
 - `.cursorrules`, `.windsurfrules`
 
@@ -116,7 +116,7 @@ Analyze the codebase to discover conventions:
 1. **Testing framework**: What test runner is used? (vitest, jest, pytest, go test, cargo test, rspec)
 2. **Code style**: Is there a formatter config? (prettier, black, rustfmt, gofmt)
 3. **Framework patterns**: Are there patterns specific to the framework? (e.g., "use server actions not API routes" for Next.js App Router)
-4. **Existing guidance**: If `agents.md` or `CLAUDE.md` already exists, extract key rules from it.
+4. **Existing guidance**: If `AGENTS.md` or `CLAUDE.md` already exists, extract key rules from it.
 5. **Import style**: ES modules vs CommonJS? Absolute vs relative imports?
 6. **Type strictness**: Is `strict: true` in tsconfig? Is mypy in strict mode?
 
@@ -149,12 +149,13 @@ Show the user what was detected in a clear format:
   1) amp
   2) claude
   3) opencode
+  4) pi
 ```
 
 Ask the user to:
 - Confirm or edit each command
 - Add, remove, or edit rules
-- Choose their preferred engine (amp, claude, opencode)
+- Choose their preferred engine (amp, claude, opencode, pi)
 
 ### Step 5: Generate `.vaibhav/config.yaml`
 
@@ -195,13 +196,13 @@ Notes:
 - `engine` is what the user chose
 - `boundaries.never_touch` always includes `*.lock` and `.env*`
 
-### Step 6: Generate `agents.md`
+### Step 6: Generate engine guidance file
 
 Generate a project guidance file for the AI engine. The filename depends on the chosen engine:
-- **amp** or **opencode**: `agents.md`
+- **amp**, **opencode**, or **pi**: `AGENTS.md`
 - **claude**: `CLAUDE.md`
 
-**Before writing:** Check if the file already exists. If it does, show the user the existing content and ask: "An agents.md already exists. Should I overwrite it, merge my findings into it, or skip?"
+**Before writing:** Check if the target file already exists. If it does, show the user the existing content and ask whether to overwrite, merge, or skip.
 
 The file should contain:
 
@@ -303,6 +304,6 @@ Read the existing `.gitignore` first and only add entries that are missing. Do n
 ## Notes
 
 - `vaibhav ralph check` is the command that runs quality checks from the config. It is called by the pre-commit hook to ensure code quality before commits.
-- Skills for direct engine access (amp, claude, opencode) are installed in `.agents/skills/`.
+- Skills for direct engine access (amp, claude, opencode, pi) are installed in `.agents/skills/`.
 - If the user wants to add more rules later, they can run `vaibhav ralph add-rule "rule text"`.
 - The config file is intentionally simple YAML — users should feel comfortable editing it by hand.

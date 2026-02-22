@@ -342,6 +342,9 @@ open_project() {
     if [[ -n "$tool" ]]; then
         if ! command -v "$tool" &>/dev/null; then
             echo -e "${RED}Error:${NC} Tool '${tool}' not found in PATH"
+            if [[ "$tool" == "pi" ]]; then
+                echo -e "${DIM}Install with: npm install -g @mariozechner/pi-coding-agent${NC}"
+            fi
             exit 1
         fi
     fi
@@ -758,7 +761,7 @@ show_usage() {
     echo "  vaibhav init                Interactive setup"
     echo "  vaibhav list                List all projects and active sessions"
     echo "  vaibhav <name>              Open a project in tmux"
-    echo "  vaibhav <name> <tool>       Open a project with an AI tool (amp, claude, codex, opencode)"
+    echo "  vaibhav <name> <tool>       Open a project with an AI tool (amp, claude, codex, opencode, pi)"
     echo "  vaibhav <name> --mosh       Open a project using mosh (resilient connection)"
     echo "  vaibhav <name> <tool> --mosh  Open with an AI tool via mosh"
     echo "  vaibhav add <name> <path>   Register a new project"
@@ -772,7 +775,7 @@ show_usage() {
     echo ""
     echo -e "${BOLD}Examples:${NC}"
     echo "  vaibhav init                First-time setup"
-    echo "  vaibhav heimdall amp        Open heimdall project with Amp"
+    echo "  vaibhav heimdall pi         Open heimdall project with pi"
     echo "  vaibhav scan ~/projects     Register all projects under ~/projects"
     echo "  vaibhav ralph init          Setup ralph config for current project"
     echo ""

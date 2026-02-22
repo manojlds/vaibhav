@@ -1,6 +1,6 @@
 # vaibhav
 
-Remote AI coding environment — run tools like Amp, Claude Code, Codex, and OpenCode on your Ubuntu desktop and use them seamlessly from your Android phone.
+Remote AI coding environment — run tools like Amp, Claude Code, Codex, OpenCode, and pi on your Ubuntu desktop and use them seamlessly from your Android phone.
 
 ## How it works
 
@@ -54,6 +54,7 @@ vaibhav list                # List all projects and active sessions
 vaibhav heimdall amp        # Open heimdall project with Amp
 vaibhav drs claude          # Open drs with Claude Code
 vaibhav myapp opencode      # Open myapp with OpenCode
+vaibhav api pi              # Open api project with pi
 vaibhav heimdall amp --mosh # Open with Amp via mosh
 vaibhav add myapp ~/myapp   # Register a new project
 vaibhav scan                # Auto-register all projects in configured directory
@@ -142,7 +143,7 @@ vaibhav/
 ## Tips
 
 - **Closing Termux** doesn't kill sessions — everything keeps running on the desktop
-- **Multiple tools**: Run `vaibhav myapp amp`, then `vaibhav myapp claude` to add Claude Code in a new window
+- **Multiple tools**: Run `vaibhav myapp amp`, then `vaibhav myapp pi` (or `vaibhav myapp claude`) to add another AI tool in a new window
 - **Tailscale** gives you a stable connection even when switching WiFi/mobile networks
 - **Termux extra keys**: Swipe from the left edge to toggle the extra keyboard row with `ESC`, `CTRL`, `ALT`, `TAB`, and common coding symbols
 - **Pinch to zoom** in Termux to adjust text size for comfortable reading on your phone

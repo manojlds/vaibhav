@@ -309,7 +309,7 @@ write_config() {
         echo "    - \"*.lock\""
         echo "    - \".env*\""
         echo ""
-        echo "engine: \"amp\"  # amp, claude, opencode"
+        echo "engine: \"amp\"  # amp, claude, opencode, pi"
         echo "max_retries: 3"
     } > "$dir/$RALPH_CONFIG_FILE"
 }
@@ -399,7 +399,7 @@ ralph_uninstall() {
         echo -e "${DIM}Nothing to clean up.${NC}"
     else
         echo -e "${GREEN}Done.${NC} Removed $removed items."
-        echo -e "${DIM}Note: agents.md / CLAUDE.md left untouched — remove manually if desired.${NC}"
+        echo -e "${DIM}Note: AGENTS.md / CLAUDE.md left untouched — remove manually if desired.${NC}"
     fi
 }
 
@@ -437,10 +437,12 @@ ralph_init() {
             echo -e "    1) amp"
             echo -e "    2) claude"
             echo -e "    3) opencode"
+            echo -e "    4) pi"
             read -rp "  Choose [1]: " engine_choice
             case "${engine_choice:-1}" in
                 2) engine="claude" ;;
                 3) engine="opencode" ;;
+                4) engine="pi" ;;
                 *) engine="amp" ;;
             esac
         fi
@@ -514,10 +516,12 @@ ralph_init() {
         echo -e "    1) amp"
         echo -e "    2) claude"
         echo -e "    3) opencode"
+        echo -e "    4) pi"
         read -rp "  Choose [1]: " engine_choice
         case "${engine_choice:-1}" in
             2) engine="claude" ;;
             3) engine="opencode" ;;
+            4) engine="pi" ;;
             *) engine="amp" ;;
         esac
     fi
@@ -776,6 +780,13 @@ dispatch_to_engine() {
                 opencode run "$prompt"
             else
                 opencode --prompt "$prompt"
+            fi
+            ;;
+        pi)
+            if [[ "$mode" == "run" ]]; then
+                pi -p "$prompt"
+            else
+                pi "$prompt"
             fi
             ;;
         *)
@@ -1388,6 +1399,9 @@ $(echo -e "$rules")
         opencode)
             opencode run "$prompt" 2>&1
             ;;
+        pi)
+            pi -p "$prompt" 2>&1
+            ;;
         *)
             echo -e "${RED}Error:${NC} Unknown engine '$engine'"
             exit 1
@@ -1417,7 +1431,7 @@ ralph_help() {
     echo "  vaibhav ralph run                  Start the ralph loop (uses prd.json)"
     echo "  vaibhav ralph run \"fix the bug\"    Single task mode (no PRD needed)"
     echo "  vaibhav ralph run --dry-run        Preview the prompt without executing"
-    echo "  vaibhav ralph run --engine claude   Override AI engine"
+    echo "  vaibhav ralph run --engine pi       Override AI engine"
     echo "  vaibhav ralph run --max-iterations 5"
     echo "  vaibhav ralph run --no-tmux        Run directly without tmux wrapping"
     echo "  vaibhav ralph status               Show PRD progress"
