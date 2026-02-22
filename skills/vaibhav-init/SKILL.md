@@ -12,7 +12,7 @@ Agentically scan a project to detect its language, framework, commands, and conv
 | File | Purpose |
 |------|---------|
 | `.vaibhav/config.yaml` | Ralph loop configuration (commands, rules, engine) |
-| `AGENTS.md` or `CLAUDE.md` | Project conventions for the AI engine |
+| `AGENTS.md` (+ `CLAUDE.md` symlink for Claude) | Project conventions for the AI engine |
 | `prek.toml` or `.git/hooks/pre-commit` | Pre-commit hook running `vaibhav ralph check` |
 | `.gitignore` updates | Ignore ralph working files |
 
@@ -116,7 +116,7 @@ Analyze the codebase to discover conventions:
 1. **Testing framework**: What test runner is used? (vitest, jest, pytest, go test, cargo test, rspec)
 2. **Code style**: Is there a formatter config? (prettier, black, rustfmt, gofmt)
 3. **Framework patterns**: Are there patterns specific to the framework? (e.g., "use server actions not API routes" for Next.js App Router)
-4. **Existing guidance**: If `AGENTS.md` or `CLAUDE.md` already exists, extract key rules from it.
+4. **Existing guidance**: Prefer `AGENTS.md` if present. If only `CLAUDE.md` exists, extract key rules from it and plan to alias files in Step 6.
 5. **Import style**: ES modules vs CommonJS? Absolute vs relative imports?
 6. **Type strictness**: Is `strict: true` in tsconfig? Is mypy in strict mode?
 
@@ -196,13 +196,18 @@ Notes:
 - `engine` is what the user chose
 - `boundaries.never_touch` always includes `*.lock` and `.env*`
 
-### Step 6: Generate engine guidance file
+### Step 6: Generate `AGENTS.md` (canonical) and Claude alias if needed
 
-Generate a project guidance file for the AI engine. The filename depends on the chosen engine:
-- **amp**, **opencode**, or **pi**: `AGENTS.md`
-- **claude**: `CLAUDE.md`
+Use `AGENTS.md` as the canonical guidance file for **all** engines (amp, claude, opencode, pi).
 
-**Before writing:** Check if the target file already exists. If it does, show the user the existing content and ask whether to overwrite, merge, or skip.
+**Before writing:** Check if `AGENTS.md` already exists. If it does, show the user the existing content and ask whether to overwrite, merge, or skip.
+
+If the selected engine is **claude**, ensure `CLAUDE.md` is available as an alias:
+- If `AGENTS.md` exists and `CLAUDE.md` is missing, create symlink: `ln -s AGENTS.md CLAUDE.md`
+- If `CLAUDE.md` exists and `AGENTS.md` is missing, create symlink: `ln -s CLAUDE.md AGENTS.md`
+- If both exist as regular files with different content, ask the user which one should be canonical, then keep one canonical file and make the other a symlink.
+
+Always write/merge content into `AGENTS.md`; `CLAUDE.md` should only be a compatibility alias when needed.
 
 The file should contain:
 

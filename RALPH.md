@@ -10,7 +10,7 @@ Ralph uses **skills** (`.agents/skills/`) for all intelligent work. The CLI comm
 
 | Skill | Purpose |
 |-------|---------|
-| `vaibhav-init` | Agentic project scanner — detects commands/rules, generates config, bootstraps engine guidance files (`AGENTS.md`/`CLAUDE.md`), sets up prek hooks |
+| `vaibhav-init` | Agentic project scanner — detects commands/rules, generates config, bootstraps canonical `AGENTS.md` guidance (plus `CLAUDE.md` symlink for Claude when needed), sets up prek hooks |
 | `vaibhav-prd` | PRD generator — asks clarifying questions, writes structured PRDs |
 | `vaibhav-convert` | PRD → prd.json converter — ensures stories are right-sized and dependency-ordered |
 | `vaibhav-loop` | Per-iteration loop instructions — reads config.yaml directly for commands and rules |
@@ -42,7 +42,7 @@ vaibhav ralph run                           # 4. Start the loop
 
 ## Step 1: Initialize project config
 
-Installs skills to `.agents/skills/`, then invokes the `vaibhav-init` skill via your AI engine. The skill interactively scans your project, confirms detected commands, generates `.vaibhav/config.yaml`, bootstraps engine guidance files (`AGENTS.md`/`CLAUDE.md`), sets up prek pre-commit hooks, and updates `.gitignore`.
+Installs skills to `.agents/skills/`, then invokes the `vaibhav-init` skill via your AI engine. The skill interactively scans your project, confirms detected commands, generates `.vaibhav/config.yaml`, bootstraps canonical `AGENTS.md` guidance (and creates `CLAUDE.md` as a symlink when Claude compatibility is needed), sets up prek pre-commit hooks, and updates `.gitignore`.
 
 **Desktop** (from the project directory):
 

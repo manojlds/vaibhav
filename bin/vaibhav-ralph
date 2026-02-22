@@ -453,6 +453,7 @@ ralph_init() {
 
         local prompt="Load vaibhav-init skill and initialize this project."
         (cd "$dir" && dispatch_to_engine "$engine" "$prompt") || true
+        ensure_guidance_aliases "$dir" "$engine"
         return
     fi
 
@@ -581,6 +582,9 @@ with open('$dir/$RALPH_CONFIG_FILE', 'w') as f:
     echo ""
     cat "$dir/$RALPH_CONFIG_FILE"
     echo ""
+
+    ensure_guidance_aliases "$dir" "$engine"
+
     echo -e "${BOLD}Next steps:${NC}"
     echo "  vaibhav ralph add-rule \"your rule here\"   Add project-specific rules"
     echo "  vaibhav ralph config                       Review config"
@@ -753,6 +757,41 @@ copy_skills_to_project() {
 skills_installed() {
     local dir="$1"
     [[ -f "$dir/.agents/skills/vaibhav-loop/SKILL.md" ]]
+}
+
+# --- File exists helper (regular file or symlink) ---
+path_exists() {
+    local path="$1"
+    [[ -e "$path" || -L "$path" ]]
+}
+
+# --- Ensure AGENTS.md canonical guidance + optional CLAUDE.md alias ---
+ensure_guidance_aliases() {
+    local dir="$1"
+    local engine="$2"
+
+    local agents_file="$dir/AGENTS.md"
+    local claude_file="$dir/CLAUDE.md"
+
+    local has_agents=false
+    local has_claude=false
+    path_exists "$agents_file" && has_agents=true
+    path_exists "$claude_file" && has_claude=true
+
+    # If only CLAUDE.md exists, create AGENTS.md symlink so tooling can standardize on AGENTS.md
+    if [[ "$has_agents" == "false" && "$has_claude" == "true" ]]; then
+        if (cd "$dir" && ln -s "CLAUDE.md" "AGENTS.md") 2>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} Created ${CYAN}AGENTS.md${NC} → ${DIM}CLAUDE.md${NC} symlink"
+            has_agents=true
+        fi
+    fi
+
+    # For Claude engine, ensure CLAUDE.md exists as a compatibility alias
+    if [[ "$engine" == "claude" && "$has_claude" == "false" && "$has_agents" == "true" ]]; then
+        if (cd "$dir" && ln -s "AGENTS.md" "CLAUDE.md") 2>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} Created ${CYAN}CLAUDE.md${NC} → ${DIM}AGENTS.md${NC} symlink"
+        fi
+    fi
 }
 
 # --- Dispatch prompt to engine ---
