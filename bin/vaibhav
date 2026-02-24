@@ -57,7 +57,7 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
     case "${1:-}" in
         init|update|setup)
             ;; # init, update, and setup always run locally
-        list|ls|help|-h|--help)
+        list|ls|help|-h|--help|web)
             exec ssh "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             ;;
         *)
@@ -754,6 +754,91 @@ update_desktop() {
     return 0
 }
 
+show_web_status() {
+    local url_only=false
+    for arg in "$@"; do
+        [[ "$arg" == "--url-only" ]] && url_only=true
+    done
+
+    # Check if opencode-web service is running
+    local service_active=false
+    if systemctl --user is-active --quiet opencode-web 2>/dev/null; then
+        service_active=true
+    fi
+
+    # Get port from the service file
+    local port=4096
+    local service_file="$HOME/.config/systemd/user/opencode-web.service"
+    if [[ -f "$service_file" ]]; then
+        local parsed_port
+        parsed_port=$(grep -o -- '--port [0-9]*' "$service_file" | awk '{print $2}')
+        if [[ -n "$parsed_port" ]]; then
+            port="$parsed_port"
+        fi
+    fi
+
+    # Get tailscale serve URL
+    local ts_url=""
+    if command -v tailscale &>/dev/null; then
+        local ts_hostname
+        ts_hostname=$(tailscale status --json 2>/dev/null | grep -m1 '"DNSName"' | grep -o '"DNSName": *"[^"]*"' | cut -d'"' -f4 | sed 's/\.$//')
+        if [[ -n "$ts_hostname" ]]; then
+            # Check tailscale serve status for the actual external port
+            local ts_port
+            ts_port=$(tailscale serve status --json 2>/dev/null | grep -o '"https://[^"]*"' | head -1 | grep -o ':[0-9]*' | tr -d ':' || true)
+            if [[ -z "$ts_port" || "$ts_port" == "443" ]]; then
+                ts_url="https://${ts_hostname}"
+            else
+                ts_url="https://${ts_hostname}:${ts_port}"
+            fi
+        fi
+    fi
+
+    if [[ "$url_only" == "true" ]]; then
+        if [[ -n "$ts_url" ]]; then
+            echo "$ts_url"
+        else
+            echo "http://127.0.0.1:${port}"
+        fi
+        return 0
+    fi
+
+    echo -e "${BOLD}OpenCode Web${NC}"
+    echo ""
+
+    # Service status
+    if [[ "$service_active" == "true" ]]; then
+        echo -e "  Service:  ${GREEN}running${NC}"
+        local health
+        health=$(curl -sf "http://127.0.0.1:${port}/global/health" 2>/dev/null || echo "")
+        if [[ -n "$health" ]]; then
+            echo -e "  Health:   ${GREEN}healthy${NC}"
+        else
+            echo -e "  Health:   ${RED}unreachable${NC}"
+        fi
+    else
+        echo -e "  Service:  ${RED}stopped${NC}"
+        echo -e "  ${DIM}Start with: systemctl --user start opencode-web${NC}"
+        echo -e "  ${DIM}Or re-run:  ./setup-desktop.sh${NC}"
+        return 0
+    fi
+
+    # URLs
+    echo -e "  Local:    ${CYAN}http://127.0.0.1:${port}${NC}"
+    if [[ -n "$ts_url" ]]; then
+        echo -e "  Tailscale:${BOLD} ${ts_url}${NC}"
+    else
+        echo -e "  Tailscale:${DIM} not configured${NC}"
+    fi
+
+    # Password hint
+    if [[ -f "$service_file" ]] && grep -q 'OPENCODE_SERVER_PASSWORD' "$service_file"; then
+        echo -e "  Password: ${DIM}set (see systemd unit)${NC}"
+    fi
+
+    echo ""
+}
+
 show_usage() {
     echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC} — Project session manager for AI coding tools"
     echo ""
@@ -769,6 +854,7 @@ show_usage() {
     echo "  vaibhav kill <name> <win>   Kill a specific window in a project"
     echo "  vaibhav remove <name>       Unregister a project"
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
+    echo "  vaibhav web                 Show OpenCode Web status and URL"
     echo "  vaibhav setup               Set up Termux environment (packages, config)"
     echo "  vaibhav update              Update vaibhav to the latest version"
     echo "  vaibhav ralph ...           Ralph loop utility (run 'vaibhav ralph help' for details)"
@@ -819,6 +905,10 @@ case "${1:-}" in
         ;;
     scan)
         scan_projects "${2:-}"
+        ;;
+    web)
+        shift
+        show_web_status "$@"
         ;;
     setup)
         setup_termux "${@:2}"
