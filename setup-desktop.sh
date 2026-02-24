@@ -212,6 +212,10 @@ ln -sf "$SCRIPT_DIR/bin/vaibhav" ~/bin/vaibhav
 chmod +x "$SCRIPT_DIR/bin/vaibhav"
 ok "$HOME/bin/vaibhav → $SCRIPT_DIR/bin/vaibhav"
 
+ln -sf "$SCRIPT_DIR/bin/vaibhav-switcher" ~/bin/vaibhav-switcher
+chmod +x "$SCRIPT_DIR/bin/vaibhav-switcher"
+ok "$HOME/bin/vaibhav-switcher → $SCRIPT_DIR/bin/vaibhav-switcher"
+
 # Make sure ~/bin is in PATH
 SHELL_RC="$HOME/.bashrc"
 if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
