@@ -21,6 +21,7 @@ cd ~/projects/vaibhav
 
 This will:
 - Install and configure tmux
+- Optionally set up OpenCode Web as a systemd service (localhost-only, with `tailscale serve` for HTTPS access)
 - Install the `vaibhav` command
 - Set up SSH server
 - Optionally install mosh for resilient mobile connections
