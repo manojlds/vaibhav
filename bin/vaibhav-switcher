@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# vaibhav-switcher — tmux project switcher menu
+# Generates a tmux display-menu command showing active sessions with their tools.
+# Called from tmux keybinding; do NOT run directly.
+set -euo pipefail
+
+current_session=$(tmux display-message -p '#{session_name}')
+
+menu_args=()
+menu_args+=("Switch" "" "")
+menu_args+=("" "" "")
+
+while IFS= read -r session; do
+    # Get window names (tools) for this session
+    windows=$(tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+
+    if [[ "$session" == "$current_session" ]]; then
+        label="● $session  [$windows]"
+    else
+        label="  $session  [$windows]"
+    fi
+
+    menu_args+=("$label" "" "switch-client -t '$session'")
+done < <(tmux list-sessions -F '#{session_name}' | sort)
+
+menu_args+=("" "" "")
+menu_args+=("Close" "" "")
+menu_args+=("" "" "")
+
+while IFS= read -r session; do
+    windows=$(tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+    label="  ✕ $session  [$windows]"
+    menu_args+=("$label" "" "confirm-before -p 'Kill $session? (y/n)' 'kill-session -t \"$session\"'")
+done < <(tmux list-sessions -F '#{session_name}' | sort)
+
+menu_args+=("" "" "")
+menu_args+=("  Detach" "" "detach-client")
+
+tmux display-menu -T "#[fg=cyan,bold] vaibhav " -x C -y C "${menu_args[@]}"
