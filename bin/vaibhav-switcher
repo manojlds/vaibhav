@@ -7,7 +7,7 @@ set -euo pipefail
 current_session=$(tmux display-message -p '#{session_name}')
 
 menu_args=()
-menu_args+=("Projects" "" "")
+menu_args+=("Switch" "" "")
 menu_args+=("" "" "")
 
 while IFS= read -r session; do
@@ -21,6 +21,16 @@ while IFS= read -r session; do
     fi
 
     menu_args+=("$label" "" "switch-client -t '$session'")
+done < <(tmux list-sessions -F '#{session_name}' | sort)
+
+menu_args+=("" "" "")
+menu_args+=("Close" "" "")
+menu_args+=("" "" "")
+
+while IFS= read -r session; do
+    windows=$(tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+    label="  ✕ $session  [$windows]"
+    menu_args+=("$label" "" "confirm-before -p 'Kill $session? (y/n)' 'kill-session -t \"$session\"'")
 done < <(tmux list-sessions -F '#{session_name}' | sort)
 
 menu_args+=("" "" "")
