@@ -17,6 +17,27 @@ Ralph uses **skills** (`.agents/skills/`) for all intelligent work. The CLI comm
 
 Skills are installed to your project's `.agents/skills/` during `vaibhav ralph init` and updated via `vaibhav ralph update-skills` or `vaibhav update`.
 
+## Pi-native extension mode
+
+In addition to the CLI workflow, this repo now ships a Pi extension package with native commands:
+
+- `/vaibhav-init`
+- `/vaibhav-prd <name> [description]`
+- `/vaibhav-convert <file>`
+- `/vaibhav-loop-start [--max-iterations N]`
+- `/vaibhav-loop-stop`
+- `/vaibhav-loop-status`
+- `/vaibhav-loop-open [loopId]`
+- `/vaibhav-loop-controller [loopId]`
+
+Install with:
+
+```bash
+pi install git:github.com/manojlds/vaibhav
+```
+
+The extension reuses the same `vaibhav-*` skills and project files (`.vaibhav/config.yaml`, `prd.json`, `progress.txt`). It records run events in the controller session (`vaibhav-event` custom entries), shows a loop progress status indicator, and can switch into the active loop iteration session with `/vaibhav-loop-open`.
+
 ```
 PRD → prd.json → Ralph Loop → Done
                     ↓
