@@ -63,6 +63,28 @@ else
     fi
 fi
 
+# --- mDNS (optional) ---
+step "mDNS LAN hostname (optional)"
+if systemctl is-active --quiet avahi-daemon 2>/dev/null; then
+    ok "mDNS already active ($(hostname).local)"
+else
+    read -rp "  Install/enable mDNS (avahi-daemon) for LAN hostname $(hostname).local? [Y/n] " yn
+    if [[ ! "$yn" =~ ^[Nn]$ ]]; then
+        if sudo apt-get update -qq && sudo apt-get install -y -qq avahi-daemon libnss-mdns; then
+            sudo systemctl enable --now avahi-daemon
+            if systemctl is-active --quiet avahi-daemon 2>/dev/null; then
+                ok "mDNS enabled ($(hostname).local)"
+            else
+                warn "avahi-daemon installed but not active — check: sudo systemctl status avahi-daemon"
+            fi
+        else
+            warn "Could not install avahi-daemon — install manually: sudo apt install avahi-daemon libnss-mdns"
+        fi
+    else
+        skip "mDNS setup"
+    fi
+fi
+
 # --- mosh (optional) ---
 step "Mosh (optional)"
 if command -v mosh-server &>/dev/null; then
@@ -276,6 +298,9 @@ echo -e "${BOLD}${GREEN}Desktop setup complete!${NC}"
 echo ""
 echo -e "Your Tailscale IP: ${CYAN}$(tailscale ip -4 2>/dev/null || echo 'N/A')${NC}"
 echo -e "Hostname:          ${CYAN}$(hostname)${NC}"
+if systemctl is-active --quiet avahi-daemon 2>/dev/null; then
+    echo -e "mDNS hostname:     ${CYAN}$(hostname).local${NC}"
+fi
 
 # Show OpenCode Web URL if configured
 if systemctl --user is-active --quiet opencode-web 2>/dev/null; then

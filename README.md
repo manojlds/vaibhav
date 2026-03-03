@@ -85,6 +85,7 @@ Once inside tmux, you can switch projects without disconnecting:
 VAIBHAV_PROJECTS_DIR="/home/user/projects"    # Where your projects live
 VAIBHAV_DESKTOP_HOST="mypc"                   # Desktop hostname (enables remote mode)
 VAIBHAV_SSH_HOST="desktop"                    # SSH host alias
+VAIBHAV_LAN_HOST="mypc.local"                 # Optional LAN target for auto-switch on home Wi-Fi
 VAIBHAV_USE_MOSH="false"                      # Use mosh by default (true/false)
 VAIBHAV_MOSH_NO_INIT="true"                   # Pass --no-init to mosh (better touch scroll in Termux)
 ```
@@ -99,6 +100,8 @@ vaibhav update --local    # phone only
 ```
 
 On Termux, this downloads and checksum-verifies the latest files, then SSHes to your desktop to `git pull`. On desktop, it runs `git pull` directly.
+
+Use `vaibhav doctor` on Termux to verify whether SSH will route to LAN (`VAIBHAV_LAN_HOST`) or Tailscale (`VAIBHAV_DESKTOP_HOST`).
 
 See [UPDATE.md](UPDATE.md) for the full details on the update process, checksum verification, and troubleshooting.
 

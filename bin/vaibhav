@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.5.0"
+VAIBHAV_VERSION="0.5.1"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -38,6 +38,7 @@ VAIBHAV_DESKTOP_HOST="${VAIBHAV_DESKTOP_HOST:-}"
 VAIBHAV_SSH_HOST="${VAIBHAV_SSH_HOST:-desktop}"
 VAIBHAV_USE_MOSH="${VAIBHAV_USE_MOSH:-false}"
 VAIBHAV_MOSH_NO_INIT="${VAIBHAV_MOSH_NO_INIT:-true}"
+VAIBHAV_LAN_HOST="${VAIBHAV_LAN_HOST:-}"
 
 if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
     echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
@@ -55,8 +56,8 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
     set -- "${args[@]+"${args[@]}"}"
 
     case "${1:-}" in
-        init|update|setup)
-            ;; # init, update, and setup always run locally
+        init|update|setup|doctor)
+            ;; # init, update, setup, and doctor always run locally
         list|ls|help|-h|--help|web)
             exec ssh "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             ;;
@@ -417,6 +418,111 @@ setup_termux() {
     else
         pkg install -y openssh
         ok "openssh installed"
+    fi
+
+    # --- SSH config (desktop alias) ---
+    step "Checking SSH config"
+    mkdir -p "$HOME/.ssh"
+    touch "$HOME/.ssh/config"
+    chmod 600 "$HOME/.ssh/config"
+
+    local ssh_host_alias="${VAIBHAV_SSH_HOST:-desktop}"
+    if [[ "$ssh_host_alias" != "desktop" ]]; then
+        skip "custom SSH alias '${ssh_host_alias}' (not managed)"
+    elif [[ -z "${VAIBHAV_DESKTOP_HOST:-}" ]]; then
+        skip "VAIBHAV_DESKTOP_HOST not set"
+    else
+        local ssh_user=""
+        ssh_user=$(awk '/^# vaibhav — Desktop connection/,/^$/{if($1=="User"){print $2; exit}}' "$HOME/.ssh/config" 2>/dev/null || true)
+
+        if [[ -z "$ssh_user" ]]; then
+            ssh_user=$(awk '
+                /^Host desktop$/ { in_host=1; next }
+                in_host && /^Host[[:space:]]+/ { in_host=0 }
+                in_host && /^[[:space:]]*User[[:space:]]+/ { print $2; exit }
+            ' "$HOME/.ssh/config" 2>/dev/null || true)
+        fi
+
+        if [[ -z "$ssh_user" ]]; then
+            skip "desktop SSH user not found in ~/.ssh/config"
+        else
+            local lan_host="${VAIBHAV_LAN_HOST:-}"
+            local has_lan_host_setting=false
+            if [[ -f "$CONFIG_FILE" ]] && grep -q '^VAIBHAV_LAN_HOST=' "$CONFIG_FILE" 2>/dev/null; then
+                has_lan_host_setting=true
+            fi
+            if [[ -z "$lan_host" ]] && [[ "$has_lan_host_setting" == "false" ]] && [[ "$VAIBHAV_DESKTOP_HOST" == *.* ]] && [[ ! "$VAIBHAV_DESKTOP_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                lan_host="${VAIBHAV_DESKTOP_HOST%%.*}.local"
+            fi
+            if [[ "$has_lan_host_setting" == "false" ]] && [[ -n "$lan_host" ]] && [[ -f "$CONFIG_FILE" ]]; then
+                echo "VAIBHAV_LAN_HOST=\"${lan_host}\"" >> "$CONFIG_FILE"
+                VAIBHAV_LAN_HOST="$lan_host"
+            fi
+
+            local ssh_block=""
+            if [[ -n "$lan_host" ]]; then
+                ssh_block=$(cat << EOF
+# vaibhav — Desktop connection
+Host desktop
+    HostName ${VAIBHAV_DESKTOP_HOST}
+    User ${ssh_user}
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 30
+    ServerAliveCountMax 5
+    Compression yes
+Match host desktop exec "ping -c 1 -W 1 ${lan_host} >/dev/null 2>&1"
+    HostName ${lan_host}
+EOF
+)
+            else
+                ssh_block=$(cat << EOF
+# vaibhav — Desktop connection
+Host desktop
+    HostName ${VAIBHAV_DESKTOP_HOST}
+    User ${ssh_user}
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 30
+    ServerAliveCountMax 5
+    Compression yes
+EOF
+)
+            fi
+
+            if grep -q "# vaibhav — Desktop connection" "$HOME/.ssh/config" 2>/dev/null; then
+                local existing_block=""
+                existing_block=$(awk '/^# vaibhav — Desktop connection/,/^$/' "$HOME/.ssh/config" | sed '/^$/d')
+                if [[ "$existing_block" == "$ssh_block" ]]; then
+                    ok "SSH config already configured"
+                else
+                    awk '
+                        /^# vaibhav — Desktop connection/ { skip=1; next }
+                        skip && /^$/ { skip=0; next }
+                        skip { next }
+                        { print }
+                    ' "$HOME/.ssh/config" > "$HOME/.ssh/config.tmp"
+                    mv "$HOME/.ssh/config.tmp" "$HOME/.ssh/config"
+                    chmod 600 "$HOME/.ssh/config"
+                    printf '\n%s\n' "$ssh_block" >> "$HOME/.ssh/config"
+                    ok "SSH config updated"
+                fi
+            elif grep -q "^Host desktop$" "$HOME/.ssh/config" 2>/dev/null; then
+                awk '
+                    /^Host desktop$/ { skip=1; next }
+                    skip && /^$/ { skip=0; next }
+                    skip && /^Match[[:space:]]+host[[:space:]]+desktop([[:space:]]|$)/ { next }
+                    skip && /^[^ \t]/ { skip=0 }
+                    !skip { print }
+                ' "$HOME/.ssh/config" > "$HOME/.ssh/config.tmp"
+                mv "$HOME/.ssh/config.tmp" "$HOME/.ssh/config"
+                chmod 600 "$HOME/.ssh/config"
+                printf '\n%s\n' "$ssh_block" >> "$HOME/.ssh/config"
+                ok "SSH config updated"
+            else
+                printf '\n%s\n' "$ssh_block" >> "$HOME/.ssh/config"
+                chmod 600 "$HOME/.ssh/config"
+                ok "SSH config added (Host: desktop)"
+            fi
+        fi
     fi
 
     # --- mosh ---
@@ -839,6 +945,115 @@ show_web_status() {
     echo ""
 }
 
+show_doctor() {
+    echo -e "${BOLD}vaibhav doctor${NC}"
+    echo ""
+
+    local ssh_alias="${VAIBHAV_SSH_HOST:-desktop}"
+    local tailscale_host="${VAIBHAV_DESKTOP_HOST:-}"
+    local lan_host="${VAIBHAV_LAN_HOST:-}"
+    local ssh_user=""
+    local alias_configured=false
+
+    local on_desktop=false
+    if [[ -n "${VAIBHAV_DESKTOP_HOST:-}" ]] && [[ "$(hostname)" == "$VAIBHAV_DESKTOP_HOST" ]]; then
+        on_desktop=true
+    fi
+
+    local vaibhav_block=""
+    if [[ -f "$HOME/.ssh/config" ]]; then
+        vaibhav_block=$(awk '/^# vaibhav — Desktop connection/,/^$/' "$HOME/.ssh/config" 2>/dev/null || true)
+    fi
+
+    if [[ -z "$tailscale_host" ]] && [[ -n "$vaibhav_block" ]]; then
+        tailscale_host=$(printf '%s\n' "$vaibhav_block" | awk '$1=="HostName"{print $2; exit}')
+    fi
+    if [[ -z "$lan_host" ]] && [[ -n "$vaibhav_block" ]]; then
+        lan_host=$(printf '%s\n' "$vaibhav_block" | sed -n 's/.*ping -c 1 -W 1 \([^ ]*\) .*/\1/p' | head -n1)
+    fi
+
+    if [[ -f "$HOME/.ssh/config" ]]; then
+        if awk -v h="$ssh_alias" '$1=="Host"{for(i=2;i<=NF;i++){if($i==h){found=1}}} END{exit !found}' "$HOME/.ssh/config" 2>/dev/null; then
+            alias_configured=true
+        fi
+    fi
+
+    if [[ "$alias_configured" == "true" ]] && command -v ssh &>/dev/null; then
+        ssh_user=$(ssh -G "$ssh_alias" 2>/dev/null | awk '$1=="user"{print $2; exit}')
+    elif [[ -n "$vaibhav_block" ]]; then
+        ssh_user=$(printf '%s\n' "$vaibhav_block" | awk '$1=="User"{print $2; exit}')
+    fi
+
+    if [[ "$on_desktop" == "true" ]]; then
+        echo -e "  Mode:            ${DIM}desktop (routing checks are most useful on Termux)${NC}"
+    fi
+
+    echo -e "  SSH alias:       ${CYAN}${ssh_alias}${NC}"
+    if [[ -n "$ssh_user" ]]; then
+        echo -e "  SSH user:        ${CYAN}${ssh_user}${NC}"
+    fi
+
+    if [[ -n "$tailscale_host" ]]; then
+        echo -e "  Tailscale host:  ${CYAN}${tailscale_host}${NC}"
+    else
+        echo -e "  Tailscale host:  ${YELLOW}not set${NC}"
+    fi
+
+    local lan_reachable="unknown"
+    if [[ -n "$lan_host" ]]; then
+        if command -v ping &>/dev/null; then
+            if ping -c 1 -W 1 "$lan_host" >/dev/null 2>&1; then
+                lan_reachable="yes"
+            else
+                lan_reachable="no"
+            fi
+            if [[ "$lan_reachable" == "yes" ]]; then
+                echo -e "  LAN mDNS host:   ${CYAN}${lan_host}${NC} ${GREEN}(reachable)${NC}"
+            else
+                echo -e "  LAN mDNS host:   ${CYAN}${lan_host}${NC} ${DIM}(not reachable)${NC}"
+            fi
+        else
+            echo -e "  LAN mDNS host:   ${CYAN}${lan_host}${NC}"
+        fi
+    else
+        echo -e "  LAN mDNS host:   ${DIM}not set${NC}"
+    fi
+
+    local effective_host=""
+    if [[ "$alias_configured" == "true" ]] && command -v ssh &>/dev/null; then
+        effective_host=$(ssh -G "$ssh_alias" 2>/dev/null | awk '$1=="hostname"{print $2; exit}')
+    fi
+
+    if [[ -z "$effective_host" || "$effective_host" == "$ssh_alias" ]]; then
+        if [[ -n "$lan_host" && "$lan_reachable" == "yes" ]]; then
+            effective_host="$lan_host"
+        else
+            effective_host="$tailscale_host"
+        fi
+    fi
+
+    if [[ -n "$effective_host" ]]; then
+        echo -e "  Current target:  ${BOLD}${effective_host}${NC}"
+    else
+        echo -e "  Current target:  ${YELLOW}unknown${NC}"
+    fi
+
+    if [[ "$alias_configured" != "true" ]]; then
+        echo -e "  SSH config:      ${YELLOW}alias '${ssh_alias}' not found in ~/.ssh/config${NC}"
+    fi
+
+    if command -v ssh &>/dev/null; then
+        if ssh -o BatchMode=yes -o ConnectTimeout=5 "$ssh_alias" "echo ok" >/dev/null 2>&1; then
+            echo -e "  SSH key auth:    ${GREEN}ok${NC}"
+        else
+            echo -e "  SSH key auth:    ${YELLOW}failed${NC}"
+            echo -e "  ${DIM}Hint: run setup-termux.sh again or check ~/.ssh/config${NC}"
+        fi
+    fi
+
+    echo ""
+}
+
 show_usage() {
     echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC} — Project session manager for AI coding tools"
     echo ""
@@ -855,6 +1070,7 @@ show_usage() {
     echo "  vaibhav remove <name>       Unregister a project"
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
     echo "  vaibhav web                 Show OpenCode Web status and URL"
+    echo "  vaibhav doctor              Check SSH routing (LAN vs Tailscale)"
     echo "  vaibhav setup               Set up Termux environment (packages, config)"
     echo "  vaibhav update              Update vaibhav to the latest version"
     echo "  vaibhav ralph ...           Ralph loop utility (run 'vaibhav ralph help' for details)"
@@ -862,6 +1078,7 @@ show_usage() {
     echo -e "${BOLD}Examples:${NC}"
     echo "  vaibhav init                First-time setup"
     echo "  vaibhav heimdall pi         Open heimdall project with pi"
+    echo "  vaibhav doctor              See whether desktop uses LAN or Tailscale"
     echo "  vaibhav scan ~/projects     Register all projects under ~/projects"
     echo "  vaibhav ralph init          Setup ralph config for current project"
     echo ""
@@ -909,6 +1126,9 @@ case "${1:-}" in
     web)
         shift
         show_web_status "$@"
+        ;;
+    doctor)
+        show_doctor
         ;;
     setup)
         setup_termux "${@:2}"
