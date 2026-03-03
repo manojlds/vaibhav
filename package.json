@@ -1,0 +1,34 @@
+{
+  "name": "@manojlds/pi-vaibhav-ralph",
+  "version": "0.1.0",
+  "description": "Pi-native vaibhav ralph extension with skill commands and fresh-context loop sessions.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "vaibhav",
+    "ralph"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/manojlds/vaibhav.git"
+  },
+  "homepage": "https://github.com/manojlds/vaibhav",
+  "bugs": "https://github.com/manojlds/vaibhav/issues",
+  "pi": {
+    "extensions": [
+      "extensions/vaibhav/index.ts"
+    ],
+    "skills": [
+      "skills/vaibhav-init/SKILL.md",
+      "skills/vaibhav-prd/SKILL.md",
+      "skills/vaibhav-convert/SKILL.md",
+      "skills/vaibhav-loop/SKILL.md"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  }
+}

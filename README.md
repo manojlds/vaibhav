@@ -123,21 +123,63 @@ vaibhav ralph -p myapp run --max-iterations 3
 
 See [RALPH.md](RALPH.md) for the full guide.
 
+## Pi extension (native workflow)
+
+This repo also ships a Pi package (`package.json` with `pi` manifest) so you can use vaibhav workflows natively inside Pi, in addition to the existing `vaibhav ralph` CLI.
+
+Install from git:
+
+```bash
+pi install git:github.com/manojlds/vaibhav
+```
+
+Then in Pi, use:
+
+- `/vaibhav-init`
+- `/vaibhav-prd <name> [description]`
+- `/vaibhav-convert <file>`
+- `/vaibhav-loop-start [--max-iterations N]`
+- `/vaibhav-loop-stop`
+- `/vaibhav-loop-status`
+- `/vaibhav-loop-open [loopId]` (jump into active iteration session)
+- `/vaibhav-loop-controller [loopId]` (jump back to controller session)
+
+### Completion handshake + tree rewind
+
+For `vaibhav-init`, `vaibhav-prd`, and `vaibhav-convert`, the extension runs an explicit completion handshake (`vaibhav_phase_done`) and then automatically performs summarize + rewind to your checkpoint, equivalent to manually using `/tree` to go back with summary.
+
+### Fresh-context loop iterations
+
+`/vaibhav-loop-start` runs each iteration in a new child session for fresh context, then switches back to the controller session and continues automatically.
+
+The extension also:
+- updates footer status indicators for active phase (`vaibhav-phase`) and loop progress (`vaibhav-loop`)
+- records vaibhav events in session custom entries (`vaibhav-event`)
+- persists run/loop state in session custom entries (`vaibhav-state`) so run IDs survive restart/session switch
+- lets you jump into the active iteration session with `/vaibhav-loop-open`
+
 ## Project structure
 
 ```
 vaibhav/
 ├── bin/
-│   ├── vaibhav          # Project session manager
-│   └── vaibhav-ralph    # Ralph loop engine
+│   ├── vaibhav              # Project session manager
+│   └── vaibhav-ralph        # Ralph loop engine
+├── skills/
+│   └── vaibhav-*            # Reusable skills (CLI + Pi extension)
+├── extensions/
+│   └── vaibhav/
+│       ├── index.ts         # Extension entrypoint
+│       └── src/             # Modular runtime/commands/tools/events/types
+├── package.json             # Pi package manifest
 ├── prompts/
-│   ├── ralph-prompt.md  # Loop iteration prompt template
-│   ├── prd-skill.md     # PRD writing skill
-│   └── prd-convert.md   # PRD → prd.json converter
-├── tmux.conf            # tmux configuration (mobile-optimized)
-├── setup-desktop.sh     # Ubuntu desktop setup
-├── setup-termux.sh      # Android Termux setup
-├── RALPH.md             # Ralph loop documentation
+│   ├── ralph-prompt.md      # Loop iteration prompt template
+│   ├── prd-skill.md         # PRD writing skill
+│   └── prd-convert.md       # PRD → prd.json converter
+├── tmux.conf                # tmux configuration (mobile-optimized)
+├── setup-desktop.sh         # Ubuntu desktop setup
+├── setup-termux.sh          # Android Termux setup
+├── RALPH.md                 # Ralph loop documentation
 └── README.md
 ```
 
