@@ -17,6 +17,7 @@ import {
 } from "./types";
 
 const STATE_ENTRY_TYPE = "vaibhav-state";
+const CHECKPOINT_ENTRY_TYPE = "vaibhav-checkpoint";
 
 type PersistedState = {
 	phaseRuns: PhaseRun[];
@@ -72,6 +73,30 @@ export class VaibhavRuntime {
 				this.activePhaseBySession.set(run.sessionKey, run.id);
 			}
 		}
+	}
+
+	private ensureCheckpointLeafId(ctx: VaibhavContext, runId: string, phase: NonLoopPhaseName): string | null {
+		const existingLeaf = ctx.sessionManager.getLeafId();
+		if (existingLeaf) return existingLeaf;
+
+		this.pi.appendEntry(CHECKPOINT_ENTRY_TYPE, {
+			runId,
+			phase,
+			createdAt: new Date().toISOString(),
+			note: "Synthetic checkpoint for vaibhav phase rewind",
+		});
+
+		const entries = ctx.sessionManager.getEntries();
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i] as any;
+			if (entry?.type !== "custom") continue;
+			if (entry?.customType !== CHECKPOINT_ENTRY_TYPE) continue;
+			if (entry?.data?.runId === runId) {
+				return entry.id ?? null;
+			}
+		}
+
+		return null;
 	}
 
 	private persistState(ctx: VaibhavContext) {
@@ -290,7 +315,7 @@ export class VaibhavRuntime {
 		}
 
 		const runId = this.shortId("run");
-		const checkpointLeafId = ctx.sessionManager.getLeafId();
+		const checkpointLeafId = this.ensureCheckpointLeafId(ctx, runId, phase);
 		const currentSessionFile = ctx.sessionManager.getSessionFile();
 
 		const run: PhaseRun = {
@@ -311,6 +336,11 @@ export class VaibhavRuntime {
 
 		if (checkpointLeafId) {
 			this.pi.setLabel(checkpointLeafId, `vaibhav:${phase}:checkpoint:${runId}`);
+		} else {
+			ctx.ui.notify(
+				`Phase ${runId} has no checkpoint leaf; finalize will complete but cannot rewind with /tree semantics.`,
+				"warning",
+			);
 		}
 
 		const kickoff = `Load and execute the ${phase} skill now.
