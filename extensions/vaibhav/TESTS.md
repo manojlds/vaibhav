@@ -1,5 +1,12 @@
 # Vaibhav Extension Test Plan
 
+## Run unit tests locally
+
+- Install dependencies: `npm install`
+- Run extension unit tests: `npm run test:unit:vaibhav-extension`
+- Watch mode: `npm run test:unit:vaibhav-extension:watch`
+- The harness uses mocks in `extensions/vaibhav/test/factories/pi.ts`, so tests run without a real Pi session.
+
 ## 1) Fast unit tests (no Pi runtime)
 
 Test pure helpers in `src/helpers.ts`:
