@@ -3,21 +3,25 @@
 
 project:
   name: "vaibhav"
-  language: "Bash"
+  language: "Bash + TypeScript"
+  framework: "CLI tooling + Pi extension"
 
 commands:
-  lint: "shellcheck bin/vaibhav bin/vaibhav-ralph"
+  lint: "shellcheck -S error bin/vaibhav bin/vaibhav-ralph"
+  build: "npm pack --dry-run"
 
 rules:
-  - "use set -euo pipefail in all scripts"
-  - "follow existing color/output conventions (step/ok/warn helpers)"
-  - "keep scripts POSIX-compatible where possible, bash where needed"
-  - "match existing coding style in bin/vaibhav"
+  - "use set -euo pipefail in bash scripts"
+  - "follow existing color/output helper conventions (step/ok/warn)"
+  - "keep Pi extension code modular under extensions/vaibhav/src"
+  - "keep new Pi-native workflows additive; do not break existing vaibhav ralph CLI behavior"
+  - "treat skills in skills/vaibhav-* as the source of truth for init/prd/convert/loop behavior"
+  - "prefer minimal, focused edits and preserve current UX"
 
 boundaries:
   never_touch:
     - "*.lock"
     - ".env*"
 
-engine: "amp"
+engine: "pi"
 max_retries: 3

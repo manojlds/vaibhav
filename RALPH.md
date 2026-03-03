@@ -36,7 +36,7 @@ Install with:
 pi install git:github.com/manojlds/vaibhav
 ```
 
-The extension reuses the same `vaibhav-*` skills and project files (`.vaibhav/config.yaml`, `prd.json`, `progress.txt`). It records run events in the controller session (`vaibhav-event` custom entries), shows a loop progress status indicator, and can switch into the active loop iteration session with `/vaibhav-loop-open`.
+The extension reuses the same `vaibhav-*` skills and project files (`.vaibhav/config.yaml`, `prd.json`, `progress.txt`). It records run events in session custom entries (`vaibhav-event`), persists run/loop state in session custom entries (`vaibhav-state`) so run IDs survive restart/switch, shows status indicators, and can switch into the active loop iteration session with `/vaibhav-loop-open`.
 
 ```
 PRD → prd.json → Ralph Loop → Done

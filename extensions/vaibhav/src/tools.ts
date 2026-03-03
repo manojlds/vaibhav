@@ -17,7 +17,7 @@ export function registerTools(pi: ExtensionAPI, runtime: VaibhavRuntime) {
 			complete: Type.Optional(Type.Boolean({ description: "Set true when loop work is fully complete" })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const result = runtime.markPhaseDone(ctx, params);
+			const result = await runtime.markPhaseDone(ctx, params);
 			return {
 				content: [{ type: "text", text: result.text }],
 				details: {},

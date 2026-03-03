@@ -18,9 +18,13 @@ Test pure helpers in `src/helpers.ts`:
 Mock `ExtensionCommandContext` / `ExtensionContext` and assert:
 
 - phase lifecycle
-  - `startPhase` creates run + checkpoint label + queues `/skill:...`
+  - `startPhase` creates run + checkpoint label + triggers skill kickoff
   - `markPhaseDone` transitions run to `awaiting_finalize`
   - `finalizeRun` performs rewind path (`switchSession` + `navigateTree`)
+- state persistence
+  - run/loop state is appended as `vaibhav-state` custom entries
+  - `handleSessionStart`/`handleSessionSwitch` restores state from current branch
+  - finalize works after restart using restored `runId`
 - loop lifecycle
   - `startLoop` creates loop and queues `/vaibhav-loop-next`
   - `runLoopIteration` creates child session and sets active iteration session

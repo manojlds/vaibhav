@@ -6,6 +6,10 @@ export function registerEvents(pi: ExtensionAPI, runtime: VaibhavRuntime) {
 		runtime.handleSessionStart(ctx);
 	});
 
+	pi.on("session_switch", (_event, ctx) => {
+		runtime.handleSessionSwitch(ctx);
+	});
+
 	pi.on("before_agent_start", (event, ctx) => {
 		return runtime.handleBeforeAgentStart(event, ctx);
 	});

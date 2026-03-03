@@ -16,6 +16,14 @@ import {
 	type VaibhavContext,
 } from "./types";
 
+const STATE_ENTRY_TYPE = "vaibhav-state";
+
+type PersistedState = {
+	phaseRuns: PhaseRun[];
+	loops: LoopRun[];
+	savedAt: string;
+};
+
 export class VaibhavRuntime {
 	private readonly phaseRuns = new Map<string, PhaseRun>();
 	private readonly activePhaseBySession = new Map<string, string>();
@@ -33,11 +41,11 @@ export class VaibhavRuntime {
 		return `${prefix}-${randomUUID().slice(0, 8)}`;
 	}
 
-	private queueUserMessage(ctx: VaibhavContext, text: string) {
+	private sendUserMessage(ctx: VaibhavContext, text: string, deliveryWhenBusy: "steer" | "followUp" = "steer") {
 		if (ctx.isIdle()) {
 			this.pi.sendUserMessage(text);
 		} else {
-			this.pi.sendUserMessage(text, { deliverAs: "followUp" });
+			this.pi.sendUserMessage(text, { deliverAs: deliveryWhenBusy });
 		}
 	}
 
@@ -49,6 +57,59 @@ export class VaibhavRuntime {
 		});
 	}
 
+	private snapshotState(): PersistedState {
+		return {
+			phaseRuns: [...this.phaseRuns.values()],
+			loops: [...this.loops.values()],
+			savedAt: new Date().toISOString(),
+		};
+	}
+
+	private rebuildIndexes() {
+		this.activePhaseBySession.clear();
+		for (const run of this.phaseRuns.values()) {
+			if (run.status === "running") {
+				this.activePhaseBySession.set(run.sessionKey, run.id);
+			}
+		}
+	}
+
+	private persistState(ctx: VaibhavContext) {
+		this.pi.appendEntry(STATE_ENTRY_TYPE, this.snapshotState());
+		this.updateLoopStatusLine(ctx);
+	}
+
+	private restoreStateFromSession(ctx: VaibhavContext) {
+		const branch = ctx.sessionManager.getBranch();
+		let latest: PersistedState | null = null;
+
+		for (const entry of branch) {
+			if (entry.type !== "custom") continue;
+			if (entry.customType !== STATE_ENTRY_TYPE) continue;
+			const data = entry.data as Partial<PersistedState> | undefined;
+			if (!data) continue;
+			if (!Array.isArray(data.phaseRuns) || !Array.isArray(data.loops)) continue;
+			latest = {
+				phaseRuns: data.phaseRuns as PhaseRun[],
+				loops: data.loops as LoopRun[],
+				savedAt: String(data.savedAt ?? ""),
+			};
+		}
+
+		this.phaseRuns.clear();
+		this.loops.clear();
+		if (latest) {
+			for (const run of latest.phaseRuns) {
+				this.phaseRuns.set(run.id, run);
+			}
+			for (const loop of latest.loops) {
+				this.loops.set(loop.id, loop);
+			}
+		}
+		this.rebuildIndexes();
+		this.updateLoopStatusLine(ctx);
+	}
+
 	private activeLoop(): LoopRun | undefined {
 		return [...this.loops.values()].find((loop) => loop.active);
 	}
@@ -58,14 +119,29 @@ export class VaibhavRuntime {
 		return this.activeLoop();
 	}
 
+	private updatePhaseStatusLine(ctx: VaibhavContext) {
+		const key = this.sessionKey(ctx);
+		const current = [...this.phaseRuns.values()]
+			.filter((run) => run.sessionKey === key && run.status !== "completed")
+			.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+			.at(-1);
+		if (!current) {
+			ctx.ui.setStatus("vaibhav-phase", undefined);
+			return;
+		}
+		const status = current.status === "awaiting_finalize" ? "awaiting finalize" : "running";
+		ctx.ui.setStatus("vaibhav-phase", `🧩 ${current.phase} ${current.id} (${status})`);
+	}
+
 	private updateLoopStatusLine(ctx: VaibhavContext) {
 		const loop = this.activeLoop();
 		if (!loop) {
 			ctx.ui.setStatus("vaibhav-loop", undefined);
-			return;
+		} else {
+			const suffix = loop.stopRequested ? " · stopping" : "";
+			ctx.ui.setStatus("vaibhav-loop", `🔁 ${loop.id} ${loop.iteration}/${loop.maxIterations}${suffix}`);
 		}
-		const suffix = loop.stopRequested ? " · stopping" : "";
-		ctx.ui.setStatus("vaibhav-loop", `🔁 ${loop.id} ${loop.iteration}/${loop.maxIterations}${suffix}`);
+		this.updatePhaseStatusLine(ctx);
 	}
 
 	private async finalizeNonLoopRun(run: PhaseRun, ctx: ExtensionCommandContext) {
@@ -90,6 +166,7 @@ export class VaibhavRuntime {
 
 		if (!confirmed) {
 			this.appendVaibhavEvent("phase_finalize_cancelled", { runId: run.id, phase: run.phase });
+			this.persistState(ctx);
 			ctx.ui.notify(`Finalize cancelled for ${run.id}. Run /vaibhav-finalize ${run.id} again when ready.`, "info");
 			return;
 		}
@@ -122,6 +199,7 @@ export class VaibhavRuntime {
 			outputs: run.outputs,
 			missingOutputs: outputs.hasMissing,
 		});
+		this.persistState(ctx);
 		ctx.ui.notify(
 			`Finalized ${run.phase} (${run.id})${outputs.hasMissing ? " — some declared outputs are missing" : ""}`,
 			outputs.hasMissing ? "warning" : "info",
@@ -132,12 +210,14 @@ export class VaibhavRuntime {
 		run.status = "completed";
 
 		if (!run.loopId) {
+			this.persistState(ctx);
 			ctx.ui.notify(`Loop metadata missing for ${run.id}`, "error");
 			return;
 		}
 
 		const loop = this.loops.get(run.loopId);
 		if (!loop) {
+			this.persistState(ctx);
 			ctx.ui.notify(`Loop ${run.loopId} not found`, "warning");
 			return;
 		}
@@ -160,12 +240,14 @@ export class VaibhavRuntime {
 			outputs: run.outputs,
 			complete: run.complete ?? false,
 		});
+		this.persistState(ctx);
 
 		if (run.complete || (run.summary && run.summary.includes(COMPLETE_MARKER))) {
 			loop.active = false;
 			loop.activeIterationSessionFile = undefined;
 			this.updateLoopStatusLine(ctx);
 			this.appendVaibhavEvent("loop_completed", { loopId: loop.id, iteration: loop.iteration });
+			this.persistState(ctx);
 			ctx.ui.notify(`Loop ${loop.id} complete after ${loop.iteration} iteration(s).`, "info");
 			return;
 		}
@@ -175,6 +257,7 @@ export class VaibhavRuntime {
 			loop.activeIterationSessionFile = undefined;
 			this.updateLoopStatusLine(ctx);
 			this.appendVaibhavEvent("loop_stopped", { loopId: loop.id, iteration: loop.iteration });
+			this.persistState(ctx);
 			ctx.ui.notify(`Loop ${loop.id} stopped by user after iteration ${loop.iteration}.`, "info");
 			return;
 		}
@@ -188,15 +271,17 @@ export class VaibhavRuntime {
 				iteration: loop.iteration,
 				maxIterations: loop.maxIterations,
 			});
+			this.persistState(ctx);
 			ctx.ui.notify(`Loop ${loop.id} reached max iterations (${loop.maxIterations}).`, "warning");
 			return;
 		}
 
 		this.updateLoopStatusLine(ctx);
-		this.queueUserMessage(ctx, `/vaibhav-loop-next ${loop.id}`);
+		this.sendUserMessage(ctx, `/vaibhav-loop-next ${loop.id}`, "steer");
 	}
 
 	async startPhase(ctx: ExtensionCommandContext, phase: NonLoopPhaseName, args: string) {
+		this.restoreStateFromSession(ctx);
 		const key = this.sessionKey(ctx);
 		const activeRunId = this.activePhaseBySession.get(key);
 		if (activeRunId) {
@@ -228,8 +313,8 @@ export class VaibhavRuntime {
 			this.pi.setLabel(checkpointLeafId, `vaibhav:${phase}:checkpoint:${runId}`);
 		}
 
-		const skillInvocation = args.trim().length > 0 ? `/skill:${phase} ${args}` : `/skill:${phase}`;
-		const kickoff = `${skillInvocation}
+		const kickoff = `Load and execute the ${phase} skill now.
+If skill slash commands are available, you may invoke /skill:${phase}${args.trim().length > 0 ? ` ${args}` : ""}.
 
 Run contract for this phase:
 - Keep collaborating with the user until this phase is truly complete.
@@ -241,11 +326,13 @@ Run contract for this phase:
 - Only call vaibhav_phase_done when the user-facing task is complete.`;
 
 		this.appendVaibhavEvent("phase_started", { runId, phase, args: args.trim() || undefined });
+		this.persistState(ctx);
 		ctx.ui.notify(`Started ${phase} (${runId})`, "info");
-		this.queueUserMessage(ctx, kickoff);
+		this.sendUserMessage(ctx, kickoff, "steer");
 	}
 
 	async finalizeRun(ctx: ExtensionCommandContext, runId: string) {
+		this.restoreStateFromSession(ctx);
 		const run = this.phaseRuns.get(runId);
 		if (!run) {
 			ctx.ui.notify(`Run not found: ${runId}`, "error");
@@ -265,6 +352,7 @@ Run contract for this phase:
 	}
 
 	async runLoopIteration(ctx: ExtensionCommandContext, loopId: string) {
+		this.restoreStateFromSession(ctx);
 		const loop = this.loops.get(loopId);
 		if (!loop) {
 			ctx.ui.notify(`Loop not found: ${loopId}`, "error");
@@ -279,6 +367,7 @@ Run contract for this phase:
 			loop.activeIterationSessionFile = undefined;
 			this.updateLoopStatusLine(ctx);
 			this.appendVaibhavEvent("loop_stopped", { loopId: loop.id, iteration: loop.iteration });
+			this.persistState(ctx);
 			ctx.ui.notify(`Loop ${loop.id} stopped.`, "info");
 			return;
 		}
@@ -291,6 +380,7 @@ Run contract for this phase:
 				iteration: loop.iteration,
 				maxIterations: loop.maxIterations,
 			});
+			this.persistState(ctx);
 			ctx.ui.notify(`Loop ${loop.id} reached max iterations (${loop.maxIterations}).`, "warning");
 			return;
 		}
@@ -339,8 +429,10 @@ Run contract for this phase:
 
 		this.phaseRuns.set(runId, run);
 		this.activePhaseBySession.set(key, runId);
+		this.persistState(ctx);
 
-		const kickoff = `/skill:vaibhav-loop
+		const kickoff = `Load and execute the vaibhav-loop skill now.
+If skill slash commands are available, you may invoke /skill:vaibhav-loop.
 
 Loop run contract:
 - loopId: ${loop.id}
@@ -356,10 +448,11 @@ Loop run contract:
 
 		ctx.ui.notify(`Loop ${loop.id}: starting iteration ${loop.iteration}/${loop.maxIterations}`, "info");
 		this.updateLoopStatusLine(ctx);
-		this.queueUserMessage(ctx, kickoff);
+		this.sendUserMessage(ctx, kickoff, "steer");
 	}
 
 	async startLoop(ctx: ExtensionCommandContext, args: string) {
+		this.restoreStateFromSession(ctx);
 		const existing = this.activeLoop();
 		if (existing) {
 			ctx.ui.notify(`Loop already active: ${existing.id}`, "warning");
@@ -391,12 +484,14 @@ Loop run contract:
 		}
 
 		this.appendVaibhavEvent("loop_started", { loopId: loop.id, maxIterations: loop.maxIterations });
+		this.persistState(ctx);
 		ctx.ui.notify(`Started loop ${loop.id} (max ${loop.maxIterations} iterations)`, "info");
 		this.updateLoopStatusLine(ctx);
-		this.queueUserMessage(ctx, `/vaibhav-loop-next ${loop.id}`);
+		this.sendUserMessage(ctx, `/vaibhav-loop-next ${loop.id}`, "steer");
 	}
 
 	async stopLoop(ctx: ExtensionCommandContext, requested: string) {
+		this.restoreStateFromSession(ctx);
 		const loop = this.findLoop(requested);
 		if (!loop) {
 			ctx.ui.notify("No active loop found.", "warning");
@@ -404,11 +499,13 @@ Loop run contract:
 		}
 		loop.stopRequested = true;
 		this.appendVaibhavEvent("loop_stop_requested", { loopId: loop.id, iteration: loop.iteration });
+		this.persistState(ctx);
 		this.updateLoopStatusLine(ctx);
 		ctx.ui.notify(`Stop requested for loop ${loop.id}. It will stop after current iteration finalizes.`, "info");
 	}
 
 	async openLoop(ctx: ExtensionCommandContext, requested: string) {
+		this.restoreStateFromSession(ctx);
 		const loop = this.findLoop(requested);
 		if (!loop) {
 			ctx.ui.notify("No active loop found.", "warning");
@@ -427,6 +524,7 @@ Loop run contract:
 	}
 
 	async openLoopController(ctx: ExtensionCommandContext, requested: string) {
+		this.restoreStateFromSession(ctx);
 		const loop = this.findLoop(requested);
 		if (!loop) {
 			ctx.ui.notify("No active loop found.", "warning");
@@ -441,6 +539,7 @@ Loop run contract:
 	}
 
 	showLoopStatus(ctx: ExtensionCommandContext) {
+		this.restoreStateFromSession(ctx);
 		const activeRuns = [...this.phaseRuns.values()].filter((r) => r.status !== "completed");
 		const activeLoops = [...this.loops.values()].filter((l) => l.active);
 
@@ -472,7 +571,8 @@ Loop run contract:
 		ctx.ui.notify(lines.join("\n"), "info");
 	}
 
-	markPhaseDone(ctx: ExtensionContext, params: PhaseDoneInput): { ok: boolean; text: string } {
+	async markPhaseDone(ctx: ExtensionContext, params: PhaseDoneInput): Promise<{ ok: boolean; text: string }> {
+		this.restoreStateFromSession(ctx);
 		const run = this.phaseRuns.get(params.runId);
 		if (!run) {
 			return { ok: false, text: `Run not found: ${params.runId}` };
@@ -497,13 +597,47 @@ Loop run contract:
 			outputs: run.outputs,
 			complete: run.complete,
 		});
+		this.persistState(ctx);
 
-		this.queueUserMessage(ctx, `/vaibhav-finalize ${run.id}`);
-		return { ok: true, text: `Recorded completion for ${run.phase} (${run.id}). Finalize queued.` };
+		if (run.phase !== "vaibhav-loop-iteration" && ctx.hasUI) {
+			const outputs = renderOutputs(run.cwd, run.outputs);
+			const confirmed = await ctx.ui.confirm(
+				"Finalize vaibhav phase",
+				[
+					`Phase: ${run.phase}`,
+					`Run: ${run.id}`,
+					"",
+					"Summary:",
+					run.summary ?? "(none)",
+					"",
+					"Outputs:",
+					...outputs.lines,
+					"",
+					"Proceed with summarize + rewind now?",
+				].join("\n"),
+			);
+			if (!confirmed) {
+				this.appendVaibhavEvent("phase_finalize_cancelled", { runId: run.id, phase: run.phase, source: "tool_confirm" });
+				this.persistState(ctx);
+				return {
+					ok: true,
+					text: `Completion recorded for ${run.phase} (${run.id}), but finalize was cancelled in confirmation dialog. Run /vaibhav-finalize ${run.id} when ready.`,
+				};
+			}
+			run.autoConfirm = true;
+		}
+
+		this.persistState(ctx);
+		this.sendUserMessage(ctx, `/vaibhav-finalize ${run.id}`, "steer");
+		return { ok: true, text: `Recorded completion for ${run.phase} (${run.id}). Finalize requested.` };
 	}
 
 	handleSessionStart(ctx: ExtensionContext) {
-		this.updateLoopStatusLine(ctx);
+		this.restoreStateFromSession(ctx);
+	}
+
+	handleSessionSwitch(ctx: ExtensionContext) {
+		this.restoreStateFromSession(ctx);
 	}
 
 	handleBeforeAgentStart(event: BeforeAgentStartEvent, ctx: ExtensionContext): { systemPrompt: string } | void {

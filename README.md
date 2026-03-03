@@ -153,8 +153,9 @@ For `vaibhav-init`, `vaibhav-prd`, and `vaibhav-convert`, the extension runs an 
 `/vaibhav-loop-start` runs each iteration in a new child session for fresh context, then switches back to the controller session and continues automatically.
 
 The extension also:
-- updates a footer status indicator with current loop progress
+- updates footer status indicators for active phase (`vaibhav-phase`) and loop progress (`vaibhav-loop`)
 - records vaibhav events in session custom entries (`vaibhav-event`)
+- persists run/loop state in session custom entries (`vaibhav-state`) so run IDs survive restart/session switch
 - lets you jump into the active iteration session with `/vaibhav-loop-open`
 
 ## Project structure
