@@ -75,6 +75,20 @@ export class VaibhavRuntime {
 		}
 	}
 
+	private findCheckpointEntryId(ctx: VaibhavContext, runId: string): string | null {
+		const sources = [ctx.sessionManager.getEntries(), ctx.sessionManager.getBranch()];
+		for (const entries of sources) {
+			for (let i = entries.length - 1; i >= 0; i--) {
+				const entry = entries[i] as any;
+				if (entry?.type !== "custom") continue;
+				if (entry?.customType !== CHECKPOINT_ENTRY_TYPE) continue;
+				if (entry?.data?.runId !== runId) continue;
+				if (typeof entry?.id === "string" && entry.id.length > 0) return entry.id;
+			}
+		}
+		return null;
+	}
+
 	private ensureCheckpointLeafId(ctx: VaibhavContext, runId: string, phase: NonLoopPhaseName): string | null {
 		const existingLeaf = ctx.sessionManager.getLeafId();
 		if (existingLeaf) return existingLeaf;
@@ -86,17 +100,14 @@ export class VaibhavRuntime {
 			note: "Synthetic checkpoint for vaibhav phase rewind",
 		});
 
-		const entries = ctx.sessionManager.getEntries();
-		for (let i = entries.length - 1; i >= 0; i--) {
-			const entry = entries[i] as any;
-			if (entry?.type !== "custom") continue;
-			if (entry?.customType !== CHECKPOINT_ENTRY_TYPE) continue;
-			if (entry?.data?.runId === runId) {
-				return entry.id ?? null;
-			}
-		}
+		const leafAfterAppend = ctx.sessionManager.getLeafId();
+		if (leafAfterAppend) return leafAfterAppend;
 
-		return null;
+		const checkpointEntryId = this.findCheckpointEntryId(ctx, runId);
+		if (checkpointEntryId) return checkpointEntryId;
+
+		const latestEntry = ctx.sessionManager.getEntries().at(-1) as any;
+		return typeof latestEntry?.id === "string" ? latestEntry.id : null;
 	}
 
 	private persistState(ctx: VaibhavContext) {

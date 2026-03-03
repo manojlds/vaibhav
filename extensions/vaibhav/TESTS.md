@@ -19,6 +19,7 @@ Mock `ExtensionCommandContext` / `ExtensionContext` and assert:
 
 - phase lifecycle
   - `startPhase` creates run + checkpoint label + triggers skill kickoff
+  - if started at empty root, extension creates a synthetic `vaibhav-checkpoint` entry so finalize can still rewind
   - `markPhaseDone` transitions run to `awaiting_finalize`
   - `finalizeRun` performs rewind path (`switchSession` + `navigateTree`)
 - state persistence
