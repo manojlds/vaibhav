@@ -1020,16 +1020,14 @@ show_doctor() {
     fi
 
     local effective_host=""
-    if [[ "$alias_configured" == "true" ]] && command -v ssh &>/dev/null; then
+    if [[ -n "$lan_host" && "$lan_reachable" == "yes" ]]; then
+        effective_host="$lan_host"
+    elif [[ "$alias_configured" == "true" ]] && command -v ssh &>/dev/null; then
         effective_host=$(ssh -G "$ssh_alias" 2>/dev/null | awk '$1=="hostname"{print $2; exit}')
     fi
 
     if [[ -z "$effective_host" || "$effective_host" == "$ssh_alias" ]]; then
-        if [[ -n "$lan_host" && "$lan_reachable" == "yes" ]]; then
-            effective_host="$lan_host"
-        else
-            effective_host="$tailscale_host"
-        fi
+        effective_host="${tailscale_host:-}"
     fi
 
     if [[ -n "$effective_host" ]]; then
