@@ -21,7 +21,6 @@ PROJECTS_FILE="$CONFIG_DIR/projects"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 DIM='\033[2m'
@@ -110,8 +109,6 @@ init_config() {
     local ssh_host="${input_ssh_host:-$default_ssh_host}"
 
     # Mosh (optional)
-    local current_use_mosh="${VAIBHAV_USE_MOSH:-false}"
-    local default_use_mosh="${current_use_mosh}"
     read -rp "Use mosh by default? [y/N] " input_use_mosh
     local use_mosh="false"
     if [[ "$input_use_mosh" =~ ^[Yy]$ ]]; then
@@ -140,6 +137,7 @@ EOF
         read -rp "Scan ${projects_dir} for projects? [Y/n] " yn
         if [[ ! "$yn" =~ ^[Nn]$ ]]; then
             # Reload config
+            # shellcheck source=/dev/null
             source "$CONFIG_FILE"
             scan_projects "$projects_dir"
         fi
@@ -601,6 +599,7 @@ EOF
         shell_rc="$HOME/.zshrc"
     fi
 
+    # shellcheck disable=SC2016
     if grep -q 'PATH=.*\$HOME/bin' "$shell_rc" 2>/dev/null; then
         ok "PATH already configured in $shell_rc"
     else
@@ -766,9 +765,11 @@ update_desktop_remote() {
 
     # Get the old version on the desktop before pulling
     local desktop_old_version
+    # shellcheck disable=SC2029
     desktop_old_version=$(ssh "$VAIBHAV_SSH_HOST" "grep '^VAIBHAV_VERSION=' '$remote_repo/bin/vaibhav' | cut -d'\"' -f2" 2>/dev/null) || desktop_old_version="unknown"
 
     # Check for local changes on desktop
+    # shellcheck disable=SC2029
     if ! ssh "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' diff --quiet 2>/dev/null && git -C '$remote_repo' diff --cached --quiet 2>/dev/null" 2>/dev/null; then
         echo -e "${YELLOW}Warning:${NC} Desktop has local changes — skipping desktop update"
         return 0
@@ -776,6 +777,7 @@ update_desktop_remote() {
 
     # Run git pull on the desktop
     local pull_output
+    # shellcheck disable=SC2029
     if ! pull_output=$(ssh "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' fetch origin && git -C '$remote_repo' checkout main && git -C '$remote_repo' pull origin main" 2>&1); then
         echo -e "${YELLOW}Warning:${NC} Desktop git pull failed — skipping"
         echo -e "  ${DIM}${pull_output}${NC}"
@@ -786,6 +788,7 @@ update_desktop_remote() {
         echo -e "${GREEN}✓${NC} Desktop already up to date (v${desktop_old_version})"
     else
         local desktop_new_version
+        # shellcheck disable=SC2029
         desktop_new_version=$(ssh "$VAIBHAV_SSH_HOST" "grep '^VAIBHAV_VERSION=' '$remote_repo/bin/vaibhav' | cut -d'\"' -f2" 2>/dev/null) || desktop_new_version="unknown"
         echo -e "${GREEN}✓${NC} Desktop updated: v${desktop_old_version} → v${desktop_new_version}"
     fi

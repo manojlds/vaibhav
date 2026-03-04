@@ -12,7 +12,6 @@ set -euo pipefail
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 DIM='\033[2m'
@@ -327,7 +326,7 @@ ralph_uninstall() {
 
     # .vaibhav/ config dir
     if [[ -d "$dir/$RALPH_CONFIG_DIR" ]]; then
-        rm -rf "$dir/$RALPH_CONFIG_DIR"
+        rm -rf "${dir:?}/$RALPH_CONFIG_DIR"
         echo -e "  ${GREEN}✓${NC} Removed ${CYAN}$RALPH_CONFIG_DIR/${NC}"
         removed=$((removed + 1))
     fi
@@ -345,7 +344,9 @@ ralph_uninstall() {
             removed=$((removed + 1))
         fi
         # Remove .agents/skills/ if empty
-        rmdir "$dir/.agents/skills" 2>/dev/null && rmdir "$dir/.agents" 2>/dev/null || true
+        if rmdir "$dir/.agents/skills" 2>/dev/null; then
+            rmdir "$dir/.agents" 2>/dev/null || true
+        fi
     fi
 
     # prd.json and progress.txt
@@ -744,8 +745,6 @@ copy_skills_to_project() {
     local count=0
     for skill_dir in "$source_dir"/vaibhav-*/; do
         [[ -d "$skill_dir" ]] || continue
-        local skill_name
-        skill_name=$(basename "$skill_dir")
         cp -r "$skill_dir" "$target_dir/"
         count=$((count + 1))
     done
@@ -1279,8 +1278,8 @@ ralph_prd_list() {
 
     # Show prd.json status if exists
     if [[ -f "$dir/prd.json" ]]; then
-        local done total
-        done=$(python3 -c "
+        local done_count total
+        done_count=$(python3 -c "
 import json
 with open('$dir/prd.json') as f:
     data = json.load(f)
@@ -1293,7 +1292,7 @@ with open('$dir/prd.json') as f:
     data = json.load(f)
 print(len(data.get('userStories', [])))
 " 2>/dev/null || echo "?")
-        echo -e "  ${BOLD}Active prd.json:${NC} ${done}/${total} stories complete"
+        echo -e "  ${BOLD}Active prd.json:${NC} ${done_count}/${total} stories complete"
     fi
 }
 
@@ -1425,7 +1424,7 @@ ralph_run() {
         if [[ -n "$current_branch" && -n "$last_branch" && "$current_branch" != "$last_branch" ]]; then
             local date_str folder_name archive_folder
             date_str=$(date +%Y-%m-%d)
-            folder_name=$(echo "$last_branch" | sed 's|^ralph/||')
+            folder_name="${last_branch#ralph/}"
             archive_folder="$archive_dir/$date_str-$folder_name"
 
             echo -e "  ${DIM}Archiving previous run: ${last_branch}${NC}"

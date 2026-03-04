@@ -6,7 +6,6 @@ set -euo pipefail
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-RED='\033[0;31m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 DIM='\033[2m'
@@ -190,7 +189,7 @@ mkdir -p ~/bin
 
 curl -fsSL "https://raw.githubusercontent.com/manojlds/vaibhav/main/bin/vaibhav" -o ~/bin/vaibhav
 chmod +x ~/bin/vaibhav
-ok "~/bin/vaibhav installed"
+ok "$HOME/bin/vaibhav installed"
 
 # --- Configure vaibhav for remote mode ---
 step "Configuring vaibhav"
