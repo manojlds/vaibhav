@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.6.2"
+VAIBHAV_VERSION="0.6.3"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -41,6 +41,11 @@ VAIBHAV_LAN_HOST="${VAIBHAV_LAN_HOST:-}"
 
 if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
     echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
+
+    # Resolve LAN host if configured and reachable
+    if [[ -n "${VAIBHAV_LAN_HOST:-}" ]] && ping -c 1 -W 1 "$VAIBHAV_LAN_HOST" >/dev/null 2>&1; then
+        VAIBHAV_SSH_HOST="$VAIBHAV_LAN_HOST"
+    fi
 
     # Check for --mosh flag
     use_mosh="$VAIBHAV_USE_MOSH"
@@ -458,22 +463,7 @@ setup_termux() {
             fi
 
             local ssh_block=""
-            if [[ -n "$lan_host" ]]; then
-                ssh_block=$(cat << EOF
-# vaibhav — Desktop connection
-Host desktop
-    HostName ${VAIBHAV_DESKTOP_HOST}
-    User ${ssh_user}
-    IdentityFile ~/.ssh/id_ed25519
-    ServerAliveInterval 30
-    ServerAliveCountMax 5
-    Compression yes
-Match originalhost desktop exec "$(command -v ping) -c 1 -W 1 ${lan_host} >/dev/null 2>&1"
-    HostName ${lan_host}
-EOF
-)
-            else
-                ssh_block=$(cat << EOF
+            ssh_block=$(cat << EOF
 # vaibhav — Desktop connection
 Host desktop
     HostName ${VAIBHAV_DESKTOP_HOST}
@@ -484,7 +474,6 @@ Host desktop
     Compression yes
 EOF
 )
-            fi
 
             if grep -q "# vaibhav — Desktop connection" "$HOME/.ssh/config" 2>/dev/null; then
                 local existing_block=""
@@ -507,7 +496,7 @@ EOF
                 awk '
                     /^Host desktop$/ { skip=1; next }
                     skip && /^$/ { skip=0; next }
-                    skip && /^Match[[:space:]]+host[[:space:]]+desktop([[:space:]]|$)/ { next }
+                    skip && /^Match[[:space:]]+(host|originalhost)[[:space:]]+desktop([[:space:]]|$)/ { next }
                     skip && /^[^ \t]/ { skip=0 }
                     !skip { print }
                 ' "$HOME/.ssh/config" > "$HOME/.ssh/config.tmp"
