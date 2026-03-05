@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.6.6"
+VAIBHAV_VERSION="0.6.7"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -1036,7 +1036,11 @@ show_doctor() {
     fi
 
     if command -v ssh &>/dev/null; then
-        if ssh -o BatchMode=yes -o ConnectTimeout=5 "$ssh_alias" "echo ok" >/dev/null 2>&1; then
+        local ssh_check_opts=()
+        if [[ -n "$lan_host" && "$lan_reachable" == "yes" ]]; then
+            ssh_check_opts=(-o "HostName=$lan_host")
+        fi
+        if ssh -o BatchMode=yes -o ConnectTimeout=5 "${ssh_check_opts[@]}" "$ssh_alias" "echo ok" >/dev/null 2>&1; then
             echo -e "  SSH key auth:    ${GREEN}ok${NC}"
         else
             echo -e "  SSH key auth:    ${YELLOW}failed${NC}"
