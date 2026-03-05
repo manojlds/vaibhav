@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.6.1"
+VAIBHAV_VERSION="0.6.2"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -468,7 +468,7 @@ Host desktop
     ServerAliveInterval 30
     ServerAliveCountMax 5
     Compression yes
-Match host desktop exec "$(command -v ping) -c 1 -W 1 ${lan_host} >/dev/null 2>&1"
+Match originalhost desktop exec "$(command -v ping) -c 1 -W 1 ${lan_host} >/dev/null 2>&1"
     HostName ${lan_host}
 EOF
 )
