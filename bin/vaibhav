@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.6.5"
+VAIBHAV_VERSION="0.6.6"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -43,8 +43,9 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
     echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
 
     # Resolve LAN host if configured and reachable
+    VAIBHAV_SSH_EXTRA_OPTS=()
     if [[ -n "${VAIBHAV_LAN_HOST:-}" ]] && ping -c 1 -W 1 "$VAIBHAV_LAN_HOST" >/dev/null 2>&1; then
-        VAIBHAV_SSH_HOST="$VAIBHAV_LAN_HOST"
+        VAIBHAV_SSH_EXTRA_OPTS=(-o "HostName=$VAIBHAV_LAN_HOST")
     fi
 
     # Check for --mosh flag
@@ -63,7 +64,7 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
         init|update|setup|doctor)
             ;; # init, update, setup, and doctor always run locally
         list|ls|help|-h|--help|web)
-            exec ssh "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
+            exec ssh "${VAIBHAV_SSH_EXTRA_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             ;;
         *)
             if [[ "$use_mosh" == "true" ]] && command -v mosh &>/dev/null; then
@@ -72,12 +73,12 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
                     mosh_args+=(--no-init)
                 fi
                 echo -e "  ${DIM}connecting via mosh...${NC}"
-                exec mosh "${mosh_args[@]}" "$VAIBHAV_SSH_HOST" -- sh -c "\$SHELL -lic \"\\\$HOME/bin/vaibhav $*\""
+                exec mosh --ssh="ssh ${VAIBHAV_SSH_EXTRA_OPTS[*]}" "${mosh_args[@]}" "$VAIBHAV_SSH_HOST" -- sh -c "\$SHELL -lic \"\\\$HOME/bin/vaibhav $*\""
             else
                 if [[ "$use_mosh" == "true" ]]; then
                     echo -e "  ${YELLOW}!${NC} ${DIM}mosh not found, falling back to ssh${NC}"
                 fi
-                exec ssh -t "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
+                exec ssh -t "${VAIBHAV_SSH_EXTRA_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             fi
             ;;
     esac
