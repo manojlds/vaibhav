@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.7.0"
+VAIBHAV_VERSION="0.7.1"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -41,7 +41,7 @@ VAIBHAV_LAN_HOST="${VAIBHAV_LAN_HOST:-}"
 
 # Resolve LAN host once — builds a global opts array used by all SSH calls
 _VSSH_OPTS=()
-if [[ -n "${VAIBHAV_LAN_HOST:-}" ]] && ping -c 1 -W 1 "$VAIBHAV_LAN_HOST" >/dev/null 2>&1; then
+if [[ -n "${VAIBHAV_LAN_HOST:-}" ]] && ping -c 1 -W 2 "$VAIBHAV_LAN_HOST" >/dev/null 2>&1; then
     _VSSH_OPTS=(-o "HostName=$VAIBHAV_LAN_HOST")
 fi
 
@@ -998,7 +998,7 @@ show_doctor() {
     local lan_reachable="unknown"
     if [[ -n "$lan_host" ]]; then
         if command -v ping &>/dev/null; then
-            if ping -c 1 -W 1 "$lan_host" >/dev/null 2>&1; then
+            if ping -c 1 -W 2 "$lan_host" >/dev/null 2>&1; then
                 lan_reachable="yes"
             else
                 lan_reachable="no"
