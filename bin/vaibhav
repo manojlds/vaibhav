@@ -39,22 +39,11 @@ VAIBHAV_USE_MOSH="${VAIBHAV_USE_MOSH:-false}"
 VAIBHAV_MOSH_NO_INIT="${VAIBHAV_MOSH_NO_INIT:-true}"
 VAIBHAV_LAN_HOST="${VAIBHAV_LAN_HOST:-}"
 
-# SSH wrapper that auto-resolves LAN host when reachable
-_VAIBHAV_LAN_RESOLVED=""
-vssh() {
-    if [[ -z "$_VAIBHAV_LAN_RESOLVED" ]]; then
-        if [[ -n "${VAIBHAV_LAN_HOST:-}" ]] && ping -c 1 -W 1 "$VAIBHAV_LAN_HOST" >/dev/null 2>&1; then
-            _VAIBHAV_LAN_RESOLVED="yes"
-        else
-            _VAIBHAV_LAN_RESOLVED="no"
-        fi
-    fi
-    if [[ "$_VAIBHAV_LAN_RESOLVED" == "yes" ]]; then
-        ssh -o "HostName=$VAIBHAV_LAN_HOST" "$@"
-    else
-        ssh "$@"
-    fi
-}
+# Resolve LAN host once — builds a global opts array used by all SSH calls
+_VSSH_OPTS=()
+if [[ -n "${VAIBHAV_LAN_HOST:-}" ]] && ping -c 1 -W 1 "$VAIBHAV_LAN_HOST" >/dev/null 2>&1; then
+    _VSSH_OPTS=(-o "HostName=$VAIBHAV_LAN_HOST")
+fi
 
 if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
     echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
@@ -75,7 +64,7 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
         init|update|setup|doctor)
             ;; # init, update, setup, and doctor always run locally
         list|ls|help|-h|--help|web)
-            exec vssh "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
+            exec ssh "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             ;;
         *)
             if [[ "$use_mosh" == "true" ]] && command -v mosh &>/dev/null; then
@@ -84,16 +73,12 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
                     mosh_args+=(--no-init)
                 fi
                 echo -e "  ${DIM}connecting via mosh...${NC}"
-                mosh_ssh_cmd="ssh"
-                if [[ "$_VAIBHAV_LAN_RESOLVED" == "yes" ]]; then
-                    mosh_ssh_cmd="ssh -o HostName=$VAIBHAV_LAN_HOST"
-                fi
-                exec mosh --ssh="$mosh_ssh_cmd" "${mosh_args[@]}" "$VAIBHAV_SSH_HOST" -- sh -c "\$SHELL -lic \"\\\$HOME/bin/vaibhav $*\""
+                exec mosh --ssh="ssh ${_VSSH_OPTS[*]}" "${mosh_args[@]}" "$VAIBHAV_SSH_HOST" -- sh -c "\$SHELL -lic \"\\\$HOME/bin/vaibhav $*\""
             else
                 if [[ "$use_mosh" == "true" ]]; then
                     echo -e "  ${YELLOW}!${NC} ${DIM}mosh not found, falling back to ssh${NC}"
                 fi
-                exec vssh -t "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
+                exec ssh -t "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             fi
             ;;
     esac
@@ -542,7 +527,7 @@ EOF
     else
         # Check if desktop has mosh-server
         local desktop_has_mosh=false
-        if [[ -n "${VAIBHAV_SSH_HOST:-}" ]] && vssh -o BatchMode=yes -o ConnectTimeout=5 "$VAIBHAV_SSH_HOST" "command -v mosh-server" &>/dev/null; then
+        if [[ -n "${VAIBHAV_SSH_HOST:-}" ]] && ssh "${_VSSH_OPTS[@]}" -o BatchMode=yes -o ConnectTimeout=5 "$VAIBHAV_SSH_HOST" "command -v mosh-server" &>/dev/null; then
             desktop_has_mosh=true
         fi
 
@@ -761,7 +746,7 @@ update_desktop_remote() {
     # Discover the repo path on the desktop via readlink
     local remote_repo
     # shellcheck disable=SC2016
-    if ! remote_repo=$(vssh "$VAIBHAV_SSH_HOST" 'repo=$(dirname "$(dirname "$(readlink -f "$HOME/bin/vaibhav")")") && echo "$repo"' 2>/dev/null); then
+    if ! remote_repo=$(ssh "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" 'repo=$(dirname "$(dirname "$(readlink -f "$HOME/bin/vaibhav")")") && echo "$repo"' 2>/dev/null); then
         echo -e "${YELLOW}Warning:${NC} Could not connect to desktop via SSH — skipping desktop update"
         return 0
     fi
@@ -774,11 +759,11 @@ update_desktop_remote() {
     # Get the old version on the desktop before pulling
     local desktop_old_version
     # shellcheck disable=SC2029
-    desktop_old_version=$(vssh "$VAIBHAV_SSH_HOST" "grep '^VAIBHAV_VERSION=' '$remote_repo/bin/vaibhav' | cut -d'\"' -f2" 2>/dev/null) || desktop_old_version="unknown"
+    desktop_old_version=$(ssh "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "grep '^VAIBHAV_VERSION=' '$remote_repo/bin/vaibhav' | cut -d'\"' -f2" 2>/dev/null) || desktop_old_version="unknown"
 
     # Check for local changes on desktop
     # shellcheck disable=SC2029
-    if ! vssh "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' diff --quiet 2>/dev/null && git -C '$remote_repo' diff --cached --quiet 2>/dev/null" 2>/dev/null; then
+    if ! ssh "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' diff --quiet 2>/dev/null && git -C '$remote_repo' diff --cached --quiet 2>/dev/null" 2>/dev/null; then
         echo -e "${YELLOW}Warning:${NC} Desktop has local changes — skipping desktop update"
         return 0
     fi
@@ -786,7 +771,7 @@ update_desktop_remote() {
     # Run git pull on the desktop
     local pull_output
     # shellcheck disable=SC2029
-    if ! pull_output=$(vssh "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' fetch origin && git -C '$remote_repo' checkout main && git -C '$remote_repo' pull origin main" 2>&1); then
+    if ! pull_output=$(ssh "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "git -C '$remote_repo' fetch origin && git -C '$remote_repo' checkout main && git -C '$remote_repo' pull origin main" 2>&1); then
         echo -e "${YELLOW}Warning:${NC} Desktop git pull failed — skipping"
         echo -e "  ${DIM}${pull_output}${NC}"
         return 0
@@ -797,7 +782,7 @@ update_desktop_remote() {
     else
         local desktop_new_version
         # shellcheck disable=SC2029
-        desktop_new_version=$(vssh "$VAIBHAV_SSH_HOST" "grep '^VAIBHAV_VERSION=' '$remote_repo/bin/vaibhav' | cut -d'\"' -f2" 2>/dev/null) || desktop_new_version="unknown"
+        desktop_new_version=$(ssh "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "grep '^VAIBHAV_VERSION=' '$remote_repo/bin/vaibhav' | cut -d'\"' -f2" 2>/dev/null) || desktop_new_version="unknown"
         echo -e "${GREEN}✓${NC} Desktop updated: v${desktop_old_version} → v${desktop_new_version}"
     fi
     return 0
@@ -1052,7 +1037,7 @@ show_doctor() {
     fi
 
     if command -v ssh &>/dev/null; then
-        if vssh -o BatchMode=yes -o ConnectTimeout=5 "$ssh_alias" "echo ok" >/dev/null 2>&1; then
+        if ssh "${_VSSH_OPTS[@]}" -o BatchMode=yes -o ConnectTimeout=5 "$ssh_alias" "echo ok" >/dev/null 2>&1; then
             echo -e "  SSH key auth:    ${GREEN}ok${NC}"
         else
             echo -e "  SSH key auth:    ${YELLOW}failed${NC}"
