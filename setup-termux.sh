@@ -54,16 +54,20 @@ else
     read -rp "Desktop username: " DESKTOP_USER </dev/tty
 fi
 
-# Optional LAN hostname for auto-switching when on home Wi-Fi
+# Optional LAN host (mDNS hostname or IPv4) for auto-switching on home Wi-Fi
 DEFAULT_LAN_HOST="${EXISTING_LAN_HOST:-}"
-if [[ -z "$DEFAULT_LAN_HOST" ]] && [[ "$DESKTOP_HOST" == *.* ]] && [[ ! "$DESKTOP_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    DEFAULT_LAN_HOST="${DESKTOP_HOST%%.*}.local"
+if [[ -z "$DEFAULT_LAN_HOST" ]] && [[ ! "$DESKTOP_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if [[ "$DESKTOP_HOST" == *.local ]]; then
+        DEFAULT_LAN_HOST="$DESKTOP_HOST"
+    else
+        DEFAULT_LAN_HOST="${DESKTOP_HOST%%.*}.local"
+    fi
 fi
 if [[ -n "${3:-}" ]]; then
     LAN_HOST="$3"
 else
     lan_prompt_default="${DEFAULT_LAN_HOST:-none}"
-    read -rp "LAN mDNS hostname (optional, '-' to disable) [${lan_prompt_default}]: " input_lan_host </dev/tty
+    read -rp "LAN host (mDNS or IPv4, optional, '-' to disable) [${lan_prompt_default}]: " input_lan_host </dev/tty
     if [[ "$input_lan_host" == "-" ]]; then
         LAN_HOST=""
     elif [[ -n "$input_lan_host" ]]; then

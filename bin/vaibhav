@@ -3,6 +3,7 @@
 # Usage:
 #   vaibhav init              - Interactive setup (creates ~/.config/vaibhav/config)
 #   vaibhav list              - List all registered projects and active sessions
+#   vaibhav refresh           - Detect desktop LAN IP and save VAIBHAV_LAN_HOST
 #   vaibhav <name>            - Attach/create tmux session for a project
 #   vaibhav <name> <tool>     - Attach/create session and launch an AI tool
 #   vaibhav add <name> <path> - Register a new project
@@ -11,7 +12,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.7.2"
+VAIBHAV_VERSION="0.7.3"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -61,8 +62,8 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
     set -- "${args[@]+"${args[@]}"}"
 
     case "${1:-}" in
-        init|update|setup|doctor)
-            ;; # init, update, setup, and doctor always run locally
+        init|update|setup|doctor|refresh)
+            ;; # init, update, setup, doctor, and refresh always run locally
         list|ls|help|-h|--help|web)
             exec ssh "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
             ;;
@@ -455,8 +456,12 @@ setup_termux() {
             if [[ -f "$CONFIG_FILE" ]] && grep -q '^VAIBHAV_LAN_HOST=' "$CONFIG_FILE" 2>/dev/null; then
                 has_lan_host_setting=true
             fi
-            if [[ -z "$lan_host" ]] && [[ "$has_lan_host_setting" == "false" ]] && [[ "$VAIBHAV_DESKTOP_HOST" == *.* ]] && [[ ! "$VAIBHAV_DESKTOP_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                lan_host="${VAIBHAV_DESKTOP_HOST%%.*}.local"
+            if [[ -z "$lan_host" ]] && [[ "$has_lan_host_setting" == "false" ]] && [[ ! "$VAIBHAV_DESKTOP_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                if [[ "$VAIBHAV_DESKTOP_HOST" == *.local ]]; then
+                    lan_host="$VAIBHAV_DESKTOP_HOST"
+                else
+                    lan_host="${VAIBHAV_DESKTOP_HOST%%.*}.local"
+                fi
             fi
             if [[ "$has_lan_host_setting" == "false" ]] && [[ -n "$lan_host" ]] && [[ -f "$CONFIG_FILE" ]]; then
                 echo "VAIBHAV_LAN_HOST=\"${lan_host}\"" >> "$CONFIG_FILE"
@@ -464,7 +469,22 @@ setup_termux() {
             fi
 
             local ssh_block=""
-            ssh_block=$(cat << EOF
+            if [[ -n "$lan_host" ]]; then
+                ssh_block=$(cat << EOF
+# vaibhav — Desktop connection
+Host desktop
+    HostName ${VAIBHAV_DESKTOP_HOST}
+    User ${ssh_user}
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 30
+    ServerAliveCountMax 5
+    Compression yes
+Match host desktop exec "ping -c 1 -W 1 ${lan_host} >/dev/null 2>&1"
+    HostName ${lan_host}
+EOF
+)
+            else
+                ssh_block=$(cat << EOF
 # vaibhav — Desktop connection
 Host desktop
     HostName ${VAIBHAV_DESKTOP_HOST}
@@ -475,6 +495,7 @@ Host desktop
     Compression yes
 EOF
 )
+            fi
 
             if grep -q "# vaibhav — Desktop connection" "$HOME/.ssh/config" 2>/dev/null; then
                 local existing_block=""
@@ -941,9 +962,127 @@ show_web_status() {
     echo ""
 }
 
+is_ipv4() {
+    local ip="$1"
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+
+    local IFS='.'
+    read -r o1 o2 o3 o4 <<< "$ip"
+    for octet in "$o1" "$o2" "$o3" "$o4"; do
+        [[ "$octet" =~ ^[0-9]{1,3}$ ]] || return 1
+        (( octet >= 0 && octet <= 255 )) || return 1
+    done
+    return 0
+}
+
+is_tailscale_ipv4() {
+    local ip="$1"
+    is_ipv4 "$ip" || return 1
+
+    local IFS='.'
+    read -r o1 o2 _ _ <<< "$ip"
+    (( o1 == 100 && o2 >= 64 && o2 <= 127 ))
+}
+
+update_config_value() {
+    local key="$1"
+    local value="$2"
+
+    mkdir -p "$CONFIG_DIR"
+    touch "$CONFIG_FILE"
+
+    if grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=\"${value}\"|" "$CONFIG_FILE"
+    else
+        echo "${key}=\"${value}\"" >> "$CONFIG_FILE"
+    fi
+}
+
+refresh_lan_host_from_desktop() {
+    local ssh_alias="${VAIBHAV_SSH_HOST:-desktop}"
+
+    local remote_cmd=""
+    remote_cmd=$(cat <<'EOF'
+iface=$(ip -4 route show default 2>/dev/null | awk '$5!="tailscale0"{print $5; exit}')
+ip=""
+if [ -n "$iface" ]; then
+    ip=$(ip -4 -o addr show dev "$iface" scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+fi
+if [ -z "$ip" ]; then
+    ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '$2!="tailscale0"{print $4}' | cut -d/ -f1 | head -n1)
+fi
+printf '%s' "$ip"
+EOF
+)
+
+    local detected_ip=""
+
+    # Prefer explicit desktop host (usually Tailscale) so stale LAN overrides don't interfere.
+    if [[ -n "${VAIBHAV_DESKTOP_HOST:-}" ]]; then
+        detected_ip=$(ssh -o "HostName=$VAIBHAV_DESKTOP_HOST" -o BatchMode=yes -o ConnectTimeout=8 "$ssh_alias" "$remote_cmd" 2>/dev/null || true)
+    fi
+
+    if [[ -z "$detected_ip" ]]; then
+        detected_ip=$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$ssh_alias" "$remote_cmd" 2>/dev/null || true)
+    fi
+
+    detected_ip="${detected_ip//$'\r'/}"
+    detected_ip="${detected_ip//$'\n'/}"
+
+    if [[ -z "$detected_ip" ]]; then
+        echo -e "  ${YELLOW}!${NC} Could not query desktop over SSH (connect via Tailscale or LAN first)"
+        return 1
+    fi
+
+    if ! is_ipv4 "$detected_ip"; then
+        echo -e "  ${YELLOW}!${NC} Desktop did not return a valid LAN IPv4 address"
+        return 1
+    fi
+
+    if is_tailscale_ipv4 "$detected_ip"; then
+        echo -e "  ${YELLOW}!${NC} Detected IP ${detected_ip} looks like a Tailscale address; not updating LAN host"
+        return 1
+    fi
+
+    update_config_value "VAIBHAV_LAN_HOST" "$detected_ip"
+    VAIBHAV_LAN_HOST="$detected_ip"
+
+    _VSSH_OPTS=()
+    if ping -c 1 -W 2 "$VAIBHAV_LAN_HOST" >/dev/null 2>&1; then
+        _VSSH_OPTS=(-o "HostName=$VAIBHAV_LAN_HOST")
+    fi
+
+    echo -e "  ${GREEN}✓${NC} LAN host updated: ${CYAN}${detected_ip}${NC}"
+    echo -e "  ${DIM}Saved to ${CONFIG_FILE}${NC}"
+    return 0
+}
+
+run_refresh() {
+    echo -e "${BOLD}vaibhav refresh${NC}"
+    echo ""
+    refresh_lan_host_from_desktop
+    echo ""
+    show_doctor
+}
+
 show_doctor() {
+    local refresh_lan=false
+    for arg in "$@"; do
+        case "$arg" in
+            --refresh-lan|--refresh-lan-ip|--update-lan-ip)
+                refresh_lan=true
+                ;;
+        esac
+    done
+
     echo -e "${BOLD}vaibhav doctor${NC}"
     echo ""
+
+    if [[ "$refresh_lan" == "true" ]]; then
+        echo -e "  ${DIM}Refreshing LAN host from desktop...${NC}"
+        refresh_lan_host_from_desktop || true
+        echo ""
+    fi
 
     local ssh_alias="${VAIBHAV_SSH_HOST:-desktop}"
     local tailscale_host="${VAIBHAV_DESKTOP_HOST:-}"
@@ -1004,15 +1143,15 @@ show_doctor() {
                 lan_reachable="no"
             fi
             if [[ "$lan_reachable" == "yes" ]]; then
-                echo -e "  LAN mDNS host:   ${CYAN}${lan_host}${NC} ${GREEN}(reachable)${NC}"
+                echo -e "  LAN host:        ${CYAN}${lan_host}${NC} ${GREEN}(reachable)${NC}"
             else
-                echo -e "  LAN mDNS host:   ${CYAN}${lan_host}${NC} ${DIM}(not reachable)${NC}"
+                echo -e "  LAN host:        ${CYAN}${lan_host}${NC} ${DIM}(not reachable)${NC}"
             fi
         else
-            echo -e "  LAN mDNS host:   ${CYAN}${lan_host}${NC}"
+            echo -e "  LAN host:        ${CYAN}${lan_host}${NC}"
         fi
     else
-        echo -e "  LAN mDNS host:   ${DIM}not set${NC}"
+        echo -e "  LAN host:        ${DIM}not set${NC}"
     fi
 
     local effective_host=""
@@ -1071,6 +1210,8 @@ show_usage() {
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
     echo "  vaibhav web                 Show OpenCode Web status and URL"
     echo "  vaibhav doctor              Check SSH routing (LAN vs Tailscale)"
+    echo "  vaibhav refresh             Detect desktop LAN IP and save it to config"
+    echo "  vaibhav doctor --refresh-lan  Same as refresh + doctor output"
     echo "  vaibhav setup               Set up Termux environment (packages, config)"
     echo "  vaibhav update              Update vaibhav to the latest version"
     echo "  vaibhav ralph ...           Ralph loop utility (run 'vaibhav ralph help' for details)"
@@ -1079,6 +1220,7 @@ show_usage() {
     echo "  vaibhav init                First-time setup"
     echo "  vaibhav heimdall pi         Open heimdall project with pi"
     echo "  vaibhav doctor              See whether desktop uses LAN or Tailscale"
+    echo "  vaibhav refresh             Refresh LAN IP after connecting via Tailscale"
     echo "  vaibhav scan ~/projects     Register all projects under ~/projects"
     echo "  vaibhav ralph init          Setup ralph config for current project"
     echo ""
@@ -1128,7 +1270,10 @@ case "${1:-}" in
         show_web_status "$@"
         ;;
     doctor)
-        show_doctor
+        show_doctor "${@:2}"
+        ;;
+    refresh)
+        run_refresh
         ;;
     setup)
         setup_termux "${@:2}"
