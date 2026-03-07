@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.7.1"
+VAIBHAV_VERSION="0.7.2"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -1037,11 +1037,17 @@ show_doctor() {
     fi
 
     if command -v ssh &>/dev/null; then
+        local ssh_debug=""
         if ssh "${_VSSH_OPTS[@]}" -o BatchMode=yes -o ConnectTimeout=5 "$ssh_alias" "echo ok" >/dev/null 2>&1; then
             echo -e "  SSH key auth:    ${GREEN}ok${NC}"
         else
             echo -e "  SSH key auth:    ${YELLOW}failed${NC}"
-            echo -e "  ${DIM}Hint: run setup-termux.sh again or check ~/.ssh/config${NC}"
+            ssh_debug=$(ssh "${_VSSH_OPTS[@]}" -v -o BatchMode=yes -o ConnectTimeout=5 "$ssh_alias" "echo ok" 2>&1 || true)
+            echo -e "  ${DIM}--- SSH debug ---${NC}"
+            echo "$ssh_debug" | grep -iE 'connect|resolve|hostname|identity|auth|offer|accept|reject|error|fail|denied|timeout|key' | while read -r line; do
+                echo -e "  ${DIM}${line}${NC}"
+            done
+            echo -e "  ${DIM}--- end ---${NC}"
         fi
     fi
 
