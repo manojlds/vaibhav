@@ -66,6 +66,13 @@ vaibhav refresh             # Detect desktop LAN IP over SSH and save VAIBHAV_LA
 vaibhav --version           # Check installed version
 ```
 
+Use a one-off backend override when you want tmux and zellij to coexist during testing:
+
+```bash
+vaibhav --mux zellij heimdall amp  # test zellij for this command only
+vaibhav --mux tmux list            # force tmux for one command
+```
+
 ### Switching projects
 
 #### tmux

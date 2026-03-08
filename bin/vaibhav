@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.8.0"
+VAIBHAV_VERSION="0.8.1"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -74,7 +74,45 @@ resolve_multiplexer_backend() {
     return 0
 }
 
+VAIBHAV_MUX_OVERRIDE=""
+parsed_args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --mux)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Error:${NC} --mux requires a value (tmux|zellij|auto)"
+                exit 1
+            fi
+            VAIBHAV_MUX_OVERRIDE=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+            shift 2
+            ;;
+        --mux=*)
+            VAIBHAV_MUX_OVERRIDE=$(printf '%s' "${1#--mux=}" | tr '[:upper:]' '[:lower:]')
+            shift
+            ;;
+        *)
+            parsed_args+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "${parsed_args[@]}"
+
+if [[ -n "$VAIBHAV_MUX_OVERRIDE" ]]; then
+    case "$VAIBHAV_MUX_OVERRIDE" in
+        tmux|zellij|auto)
+            ;;
+        *)
+            echo -e "${RED}Error:${NC} Invalid --mux value '${VAIBHAV_MUX_OVERRIDE}' (expected: tmux|zellij|auto)"
+            exit 1
+            ;;
+    esac
+fi
+
 VAIBHAV_MULTIPLEXER="$(normalize_multiplexer_preference "${VAIBHAV_MULTIPLEXER:-auto}")"
+if [[ -n "$VAIBHAV_MUX_OVERRIDE" ]]; then
+    VAIBHAV_MULTIPLEXER="$VAIBHAV_MUX_OVERRIDE"
+fi
 VAIBHAV_MUX_BACKEND="$(resolve_multiplexer_backend "$VAIBHAV_MULTIPLEXER")"
 
 mux_backend_name() {
@@ -233,11 +271,20 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
     done
     set -- "${args[@]+"${args[@]}"}"
 
+    forwarded_args="$*"
+    if [[ -n "$VAIBHAV_MUX_OVERRIDE" ]]; then
+        if [[ -n "$forwarded_args" ]]; then
+            forwarded_args="--mux ${VAIBHAV_MUX_OVERRIDE} ${forwarded_args}"
+        else
+            forwarded_args="--mux ${VAIBHAV_MUX_OVERRIDE}"
+        fi
+    fi
+
     case "${1:-}" in
         init|update|setup|doctor|refresh)
             ;; # init, update, setup, doctor, and refresh always run locally
         list|ls|help|-h|--help|web)
-            exec ssh "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
+            exec ssh "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav ${forwarded_args}'"
             ;;
         *)
             if [[ "$use_mosh" == "true" ]] && command -v mosh &>/dev/null; then
@@ -246,12 +293,12 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOS
                     mosh_args+=(--no-init)
                 fi
                 echo -e "  ${DIM}connecting via mosh...${NC}"
-                exec mosh --ssh="ssh ${_VSSH_OPTS[*]}" "${mosh_args[@]}" "$VAIBHAV_SSH_HOST" -- sh -c "\$SHELL -lic \"\\\$HOME/bin/vaibhav $*\""
+                exec mosh --ssh="ssh ${_VSSH_OPTS[*]}" "${mosh_args[@]}" "$VAIBHAV_SSH_HOST" -- sh -c "\$SHELL -lic \"\\\$HOME/bin/vaibhav ${forwarded_args}\""
             else
                 if [[ "$use_mosh" == "true" ]]; then
                     echo -e "  ${YELLOW}!${NC} ${DIM}mosh not found, falling back to ssh${NC}"
                 fi
-                exec ssh -t "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav $*'"
+                exec ssh -t "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav ${forwarded_args}'"
             fi
             ;;
     esac
@@ -1447,6 +1494,7 @@ show_usage() {
     echo -e "${BOLD}Usage:${NC}"
     echo "  vaibhav init                Interactive setup"
     echo "  vaibhav list                List all projects and active sessions"
+    echo "  vaibhav --mux <backend> ... Override multiplexer for this command (tmux|zellij|auto)"
     echo "  vaibhav <name>              Open a project in the configured multiplexer"
     echo "  vaibhav <name> <tool>       Open a project with an AI tool (amp, claude, codex, opencode, pi)"
     echo "  vaibhav <name> --mosh       Open a project using mosh (resilient connection)"
@@ -1468,6 +1516,8 @@ show_usage() {
     echo "  vaibhav init                First-time setup"
     echo "  vaibhav heimdall pi         Open heimdall project with pi"
     echo "  vaibhav doctor              See whether desktop uses LAN or Tailscale"
+    echo "  vaibhav --mux zellij heimdall amp  Test zellij on one command"
+    echo "  vaibhav --mux tmux list     Force tmux for a single call"
     echo "  vaibhav refresh             Refresh LAN IP after connecting via Tailscale"
     echo "  vaibhav scan ~/projects     Register all projects under ~/projects"
     echo "  vaibhav ralph init          Setup ralph config for current project"
