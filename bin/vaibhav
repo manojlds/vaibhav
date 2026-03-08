@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.8.2"
+VAIBHAV_VERSION="0.8.3"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -803,31 +803,28 @@ open_project() {
         local inside_zellij=false
         [[ -n "${ZELLIJ:-}" ]] && inside_zellij=true
 
-        # Outside zellij, we need to pre-create tabs before attaching (attach takes over the TTY).
+        # Outside zellij: queue tool launch in the background so it runs once a client is attached.
         if [[ "$inside_zellij" == "false" && -n "$tool" ]]; then
             zellij_ensure_background_session "$name" "$path"
 
-            if ! run_zellij --session "$name" action go-to-tab-name "$tool" >/dev/null 2>&1; then
-                local created_tool_tab=false
-                if run_zellij --session "$name" action new-tab --name "$tool" --cwd "$path" >/dev/null 2>&1; then
-                    created_tool_tab=true
-                else
-                    zellij_ensure_background_session "$name" "$path"
-                    if run_zellij --session "$name" action new-tab --name "$tool" --cwd "$path" >/dev/null 2>&1; then
-                        created_tool_tab=true
-                    else
-                        echo -e "  ${YELLOW}!${NC} ${DIM}Could not pre-create zellij tab '${tool}'; attaching anyway${NC}"
-                    fi
-                fi
+            if ! mux_target_exists "$name" "$tool"; then
+                (
+                    # Retries handle race conditions between session creation and attach.
+                    for _try in $(seq 1 40); do
+                        if run_zellij --session "$name" action go-to-tab-name "$tool" >/dev/null 2>&1 || \
+                           run_zellij --session "$name" action new-tab --name "$tool" --cwd "$path" >/dev/null 2>&1; then
+                            run_zellij --session "$name" action go-to-tab-name "$tool" >/dev/null 2>&1 || true
 
-                if [[ "$created_tool_tab" == "true" ]]; then
-                    run_zellij --session "$name" action go-to-tab-name "$tool" >/dev/null 2>&1 || true
-                    if ! run_zellij --session "$name" action new-pane --in-place --cwd "$path" -- "$tool" >/dev/null 2>&1; then
-                        # Fallback: type into the tab's shell if in-place launch is unavailable.
-                        run_zellij --session "$name" action write-chars "$tool" >/dev/null 2>&1 || true
-                        run_zellij --session "$name" action write 10 >/dev/null 2>&1 || true
-                    fi
-                fi
+                            if ! run_zellij --session "$name" action new-pane --in-place --cwd "$path" -- "$tool" >/dev/null 2>&1; then
+                                # Fallback: type into the tab's shell if in-place launch is unavailable.
+                                run_zellij --session "$name" action write-chars "$tool" >/dev/null 2>&1 || true
+                                run_zellij --session "$name" action write 10 >/dev/null 2>&1 || true
+                            fi
+                            break
+                        fi
+                        sleep 0.2
+                    done
+                ) >/dev/null 2>&1 &
             fi
         fi
 
