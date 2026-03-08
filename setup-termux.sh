@@ -24,9 +24,11 @@ CONFIG_FILE="$CONFIG_DIR/config"
 EXISTING_HOST=""
 EXISTING_USER=""
 EXISTING_LAN_HOST=""
+EXISTING_MULTIPLEXER=""
 if [[ -f "$CONFIG_FILE" ]]; then
     EXISTING_HOST=$(grep '^VAIBHAV_DESKTOP_HOST=' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2) || true
     EXISTING_LAN_HOST=$(grep '^VAIBHAV_LAN_HOST=' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2) || true
+    EXISTING_MULTIPLEXER=$(grep '^VAIBHAV_MULTIPLEXER=' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2) || true
     # Extract username from SSH config (not from vaibhav config — it doesn't store username)
     if [[ -f ~/.ssh/config ]]; then
         EXISTING_USER=$(awk '/^# vaibhav/,/^$/{if(/User /){print $2}}' ~/.ssh/config 2>/dev/null) || true
@@ -204,6 +206,7 @@ VAIBHAV_DESKTOP_HOST="${DESKTOP_HOST}"
 VAIBHAV_SSH_HOST="desktop"
 VAIBHAV_MOSH_NO_INIT="true"
 VAIBHAV_LAN_HOST="${LAN_HOST}"
+VAIBHAV_MULTIPLEXER="${EXISTING_MULTIPLEXER:-auto}"
 EOF
 ok "Config saved to $CONFIG_DIR/config"
 
@@ -224,7 +227,8 @@ echo -e "${BOLD}Tips:${NC}"
 echo "  • Swipe left edge of screen → toggle extra keys"
 echo "  • Pinch to zoom text size"
 echo "  • Closing Termux keeps sessions alive on desktop"
-echo "  • Alt+s to switch projects (once in tmux)"
+echo "  • tmux: Alt+s opens the session switcher"
+echo "  • zellij: Ctrl+o then w opens session manager"
 if [[ -n "$LAN_HOST" ]]; then
     echo "  • SSH auto-switches: LAN (${LAN_HOST}) first, then Tailscale (${DESKTOP_HOST})"
 fi

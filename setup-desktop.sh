@@ -20,7 +20,7 @@ echo -e "${BOLD}vaibhav — Desktop Setup${NC}"
 echo -e "${DIM}Setting up remote AI coding environment on $(hostname)${NC}"
 
 # --- tmux ---
-step "Installing tmux"
+step "Installing tmux (default multiplexer)"
 if command -v tmux &>/dev/null; then
     ok "tmux already installed ($(tmux -V))"
 else
@@ -46,6 +46,23 @@ if tmux ls &>/dev/null; then
     fi
 else
     skip "tmux server not running (config applies on next start)"
+fi
+
+# --- zellij (optional) ---
+step "Zellij (optional multiplexer)"
+if command -v zellij &>/dev/null; then
+    ok "zellij already installed ($(zellij --version 2>/dev/null || echo 'version unknown'))"
+else
+    read -rp "  Install zellij as an alternative to tmux? [y/N] " yn
+    if [[ "$yn" =~ ^[Yy]$ ]]; then
+        if sudo apt-get update -qq && sudo apt-get install -y -qq zellij; then
+            ok "zellij installed"
+        else
+            warn "Could not install zellij — install manually if needed"
+        fi
+    else
+        skip "zellij (can install later with: sudo apt install zellij)"
+    fi
 fi
 
 # --- SSH server ---
