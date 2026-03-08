@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.8.1"
+VAIBHAV_VERSION="0.8.2"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -46,6 +46,32 @@ normalize_multiplexer_preference() {
     esac
 }
 
+resolve_zellij_binary() {
+    local configured="${VAIBHAV_ZELLIJ_BIN:-}"
+    if [[ -n "$configured" && -x "$configured" ]]; then
+        printf '%s\n' "$configured"
+        return 0
+    fi
+
+    local from_path=""
+    from_path=$(command -v zellij 2>/dev/null || true)
+    if [[ -n "$from_path" && -x "$from_path" ]]; then
+        printf '%s\n' "$from_path"
+        return 0
+    fi
+
+    local candidate
+    for candidate in "$HOME/.cargo/bin/zellij" "$HOME/.local/bin/zellij" "/usr/local/bin/zellij" "/snap/bin/zellij"; do
+        if [[ -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    printf '%s\n' ""
+    return 0
+}
+
 resolve_multiplexer_backend() {
     local preference="${1:-auto}"
     local backend=""
@@ -57,14 +83,14 @@ resolve_multiplexer_backend() {
             fi
             ;;
         zellij)
-            if command -v zellij >/dev/null 2>&1; then
+            if [[ -n "$VAIBHAV_ZELLIJ_BIN" ]]; then
                 backend="zellij"
             fi
             ;;
         auto)
             if command -v tmux >/dev/null 2>&1; then
                 backend="tmux"
-            elif command -v zellij >/dev/null 2>&1; then
+            elif [[ -n "$VAIBHAV_ZELLIJ_BIN" ]]; then
                 backend="zellij"
             fi
             ;;
@@ -113,6 +139,7 @@ VAIBHAV_MULTIPLEXER="$(normalize_multiplexer_preference "${VAIBHAV_MULTIPLEXER:-
 if [[ -n "$VAIBHAV_MUX_OVERRIDE" ]]; then
     VAIBHAV_MULTIPLEXER="$VAIBHAV_MUX_OVERRIDE"
 fi
+VAIBHAV_ZELLIJ_BIN="$(resolve_zellij_binary)"
 VAIBHAV_MUX_BACKEND="$(resolve_multiplexer_backend "$VAIBHAV_MULTIPLEXER")"
 
 mux_backend_name() {
@@ -151,23 +178,29 @@ require_mux_backend() {
             ;;
         zellij)
             echo -e "${RED}Error:${NC} zellij is selected but not installed"
-            echo -e "${DIM}Install with: sudo apt install zellij${NC}"
+            echo -e "${DIM}Install with: cargo install --locked zellij${NC}"
+            echo -e "${DIM}If already installed outside PATH, set VAIBHAV_ZELLIJ_BIN in ${CONFIG_FILE}${NC}"
             ;;
         *)
             echo -e "${RED}Error:${NC} No supported multiplexer found"
-            echo -e "${DIM}Install tmux (sudo apt install tmux) or zellij (sudo apt install zellij)${NC}"
+            echo -e "${DIM}Install tmux (sudo apt install tmux) or zellij (cargo install --locked zellij)${NC}"
             ;;
     esac
     return 1
 }
 
-mux_active_sessions() {
-    case "$VAIBHAV_MUX_BACKEND" in
+run_zellij() {
+    "$VAIBHAV_ZELLIJ_BIN" "$@"
+}
+
+mux_active_sessions_for_backend() {
+    local backend="$1"
+    case "$backend" in
         tmux)
             tmux list-sessions -F "#{session_name}" 2>/dev/null || true
             ;;
         zellij)
-            zellij list-sessions --no-formatting 2>/dev/null |
+            run_zellij list-sessions --no-formatting 2>/dev/null |
                 awk '
                     /^[[:space:]]*$/ { next }
                     /No active sessions/ { next }
@@ -178,21 +211,31 @@ mux_active_sessions() {
     esac
 }
 
+mux_active_sessions() {
+    mux_active_sessions_for_backend "$VAIBHAV_MUX_BACKEND"
+}
+
 mux_session_exists() {
     local session="$1"
     mux_active_sessions | grep -qx "$session" 2>/dev/null
 }
 
-mux_list_targets() {
-    local session="$1"
-    case "$VAIBHAV_MUX_BACKEND" in
+mux_list_targets_for_backend() {
+    local backend="$1"
+    local session="$2"
+    case "$backend" in
         tmux)
             tmux list-windows -t "$session" -F "#{window_name}" 2>/dev/null || true
             ;;
         zellij)
-            zellij --session "$session" action query-tab-names 2>/dev/null | sed '/^[[:space:]]*$/d' || true
+            run_zellij --session "$session" action query-tab-names 2>/dev/null | sed '/^[[:space:]]*$/d' || true
             ;;
     esac
+}
+
+mux_list_targets() {
+    local session="$1"
+    mux_list_targets_for_backend "$VAIBHAV_MUX_BACKEND" "$session"
 }
 
 mux_target_exists() {
@@ -201,9 +244,15 @@ mux_target_exists() {
     mux_list_targets "$session" | grep -qx "$target" 2>/dev/null
 }
 
+mux_targets_csv_for_backend() {
+    local backend="$1"
+    local session="$2"
+    mux_list_targets_for_backend "$backend" "$session" | tr '\n' ',' | sed 's/,$//'
+}
+
 mux_targets_csv() {
     local session="$1"
-    mux_list_targets "$session" | tr '\n' ',' | sed 's/,$//'
+    mux_targets_csv_for_backend "$VAIBHAV_MUX_BACKEND" "$session"
 }
 
 mux_switch_or_attach() {
@@ -220,13 +269,13 @@ mux_switch_or_attach() {
             ;;
         zellij)
             if [[ -n "${ZELLIJ:-}" ]]; then
-                if ! zellij action switch-session "$session" --cwd "$path"; then
-                    zellij action switch-session "$session"
+                if ! run_zellij action switch-session "$session" --cwd "$path"; then
+                    run_zellij action switch-session "$session"
                 fi
             else
                 (
                     cd "$path"
-                    zellij attach --create "$session"
+                    run_zellij attach --create "$session"
                 )
             fi
             ;;
@@ -239,7 +288,7 @@ zellij_ensure_background_session() {
 
     (
         cd "$path"
-        zellij attach --create-background "$session"
+        run_zellij attach --create-background "$session"
     ) >/dev/null 2>&1 || true
 }
 
@@ -394,8 +443,25 @@ list_projects() {
         return
     fi
 
+    local show_both=false
+    local tmux_available=false
+    local zellij_available=false
     local active_sessions=""
-    if [[ -n "$VAIBHAV_MUX_BACKEND" ]]; then
+    local active_sessions_tmux=""
+    local active_sessions_zellij=""
+
+    if command -v tmux >/dev/null 2>&1; then
+        tmux_available=true
+    fi
+    if [[ -n "${VAIBHAV_ZELLIJ_BIN:-}" ]]; then
+        zellij_available=true
+    fi
+
+    if [[ "$VAIBHAV_MULTIPLEXER" == "auto" && "$tmux_available" == "true" && "$zellij_available" == "true" ]]; then
+        show_both=true
+        active_sessions_tmux=$(mux_active_sessions_for_backend "tmux" || true)
+        active_sessions_zellij=$(mux_active_sessions_for_backend "zellij" || true)
+    elif [[ -n "$VAIBHAV_MUX_BACKEND" ]]; then
         active_sessions=$(mux_active_sessions || true)
     elif [[ "$VAIBHAV_MULTIPLEXER" != "auto" ]]; then
         echo -e "  ${YELLOW}!${NC} ${DIM}${VAIBHAV_MULTIPLEXER} is configured but not installed; showing projects only${NC}"
@@ -406,17 +472,54 @@ list_projects() {
 
         local status="${DIM}inactive${NC}"
         local indicator=" "
-        if echo "$active_sessions" | grep -qx "$name" 2>/dev/null; then
-            local targets
-            targets=$(mux_targets_csv "$name")
-            status="${GREEN}active${NC} ${DIM}[${targets}]${NC}"
-            indicator="${GREEN}●${NC}"
-        fi
 
-        # Ralph sessions are tmux-only today.
-        if [[ "$VAIBHAV_MUX_BACKEND" == "tmux" ]] && echo "$active_sessions" | grep -qx "ralph-${name}" 2>/dev/null; then
-            status+=" ${YELLOW}ralph running${NC}"
-            [[ "$indicator" == " " ]] && indicator="${YELLOW}●${NC}"
+        local active_tmux=false
+        local active_zellij=false
+
+        if [[ "$show_both" == "true" ]]; then
+            echo "$active_sessions_tmux" | grep -qx "$name" 2>/dev/null && active_tmux=true
+            echo "$active_sessions_zellij" | grep -qx "$name" 2>/dev/null && active_zellij=true
+
+            if [[ "$active_tmux" == "true" || "$active_zellij" == "true" ]]; then
+                indicator="${GREEN}●${NC}"
+                local status_parts=""
+
+                if [[ "$active_tmux" == "true" ]]; then
+                    local tmux_targets
+                    tmux_targets=$(mux_targets_csv_for_backend "tmux" "$name")
+                    status_parts="tmux:[${tmux_targets}]"
+                fi
+
+                if [[ "$active_zellij" == "true" ]]; then
+                    local zellij_targets
+                    zellij_targets=$(mux_targets_csv_for_backend "zellij" "$name")
+                    if [[ -n "$status_parts" ]]; then
+                        status_parts+=" | "
+                    fi
+                    status_parts+="zellij:[${zellij_targets}]"
+                fi
+
+                status="${GREEN}active${NC} ${DIM}[${status_parts}]${NC}"
+            fi
+
+            # Ralph sessions are tmux-only today.
+            if echo "$active_sessions_tmux" | grep -qx "ralph-${name}" 2>/dev/null; then
+                status+=" ${YELLOW}ralph running${NC}"
+                [[ "$indicator" == " " ]] && indicator="${YELLOW}●${NC}"
+            fi
+        else
+            if echo "$active_sessions" | grep -qx "$name" 2>/dev/null; then
+                local targets
+                targets=$(mux_targets_csv "$name")
+                status="${GREEN}active${NC} ${DIM}[${targets}]${NC}"
+                indicator="${GREEN}●${NC}"
+            fi
+
+            # Ralph sessions are tmux-only today.
+            if [[ "$VAIBHAV_MUX_BACKEND" == "tmux" ]] && echo "$active_sessions" | grep -qx "ralph-${name}" 2>/dev/null; then
+                status+=" ${YELLOW}ralph running${NC}"
+                [[ "$indicator" == " " ]] && indicator="${YELLOW}●${NC}"
+            fi
         fi
 
         echo -e "  ${indicator} ${CYAN}${name}${NC} ${DIM}→${NC} ${path}"
@@ -425,25 +528,59 @@ list_projects() {
 
     echo ""
 
-    # Show orphan sessions (not in projects file)
-    if [[ -n "$active_sessions" ]]; then
-        local orphans=""
+    if [[ "$show_both" == "true" ]]; then
+        local orphans_tmux=""
+        local orphans_zellij=""
+
         while IFS= read -r session; do
-            if [[ "$VAIBHAV_MUX_BACKEND" == "tmux" ]]; then
-                # Skip ralph sessions (shown with their project above)
-                local base_name="${session#ralph-}"
-                if [[ "$base_name" != "$session" ]] && grep -q "^${base_name}=" "$PROJECTS_FILE" 2>/dev/null; then
-                    continue
-                fi
+            [[ -z "$session" ]] && continue
+            local base_name="${session#ralph-}"
+            if [[ "$base_name" != "$session" ]] && grep -q "^${base_name}=" "$PROJECTS_FILE" 2>/dev/null; then
+                continue
             fi
             if ! grep -q "^${session}=" "$PROJECTS_FILE" 2>/dev/null; then
-                orphans+="  ${YELLOW}?${NC} ${session}\n"
+                orphans_tmux+="  ${YELLOW}?${NC} ${session}\n"
             fi
-        done <<< "$active_sessions"
-        if [[ -n "$orphans" ]]; then
-            echo -e "${BOLD}Other $(mux_backend_name) sessions${NC}"
+        done <<< "$active_sessions_tmux"
+
+        while IFS= read -r session; do
+            [[ -z "$session" ]] && continue
+            if ! grep -q "^${session}=" "$PROJECTS_FILE" 2>/dev/null; then
+                orphans_zellij+="  ${YELLOW}?${NC} ${session}\n"
+            fi
+        done <<< "$active_sessions_zellij"
+
+        if [[ -n "$orphans_tmux" ]]; then
+            echo -e "${BOLD}Other tmux sessions${NC}"
             echo ""
-            echo -e "$orphans"
+            echo -e "$orphans_tmux"
+        fi
+        if [[ -n "$orphans_zellij" ]]; then
+            echo -e "${BOLD}Other zellij sessions${NC}"
+            echo ""
+            echo -e "$orphans_zellij"
+        fi
+    else
+        # Show orphan sessions (not in projects file)
+        if [[ -n "$active_sessions" ]]; then
+            local orphans=""
+            while IFS= read -r session; do
+                if [[ "$VAIBHAV_MUX_BACKEND" == "tmux" ]]; then
+                    # Skip ralph sessions (shown with their project above)
+                    local base_name="${session#ralph-}"
+                    if [[ "$base_name" != "$session" ]] && grep -q "^${base_name}=" "$PROJECTS_FILE" 2>/dev/null; then
+                        continue
+                    fi
+                fi
+                if ! grep -q "^${session}=" "$PROJECTS_FILE" 2>/dev/null; then
+                    orphans+="  ${YELLOW}?${NC} ${session}\n"
+                fi
+            done <<< "$active_sessions"
+            if [[ -n "$orphans" ]]; then
+                echo -e "${BOLD}Other $(mux_backend_name) sessions${NC}"
+                echo ""
+                echo -e "$orphans"
+            fi
         fi
     fi
 }
@@ -491,7 +628,7 @@ remove_project() {
             if [[ "$VAIBHAV_MUX_BACKEND" == "tmux" ]]; then
                 tmux kill-session -t "$name"
             else
-                zellij kill-session "$name"
+                run_zellij kill-session "$name"
             fi
             echo -e "  ${DIM}Session killed${NC}"
         fi
@@ -529,8 +666,8 @@ kill_project() {
         if [[ "$VAIBHAV_MUX_BACKEND" == "tmux" ]]; then
             tmux kill-window -t "${name}:${window}"
         else
-            zellij --session "$name" action go-to-tab-name "$window" >/dev/null
-            zellij --session "$name" action close-tab >/dev/null
+            run_zellij --session "$name" action go-to-tab-name "$window" >/dev/null
+            run_zellij --session "$name" action close-tab >/dev/null
         fi
         echo -e "${GREEN}✓${NC} Killed $(mux_target_name) ${CYAN}${window}${NC} in ${CYAN}${name}${NC}"
     else
@@ -551,7 +688,7 @@ kill_project() {
             if [[ "$VAIBHAV_MUX_BACKEND" == "tmux" ]]; then
                 tmux kill-session -t "$name"
             else
-                zellij kill-session "$name"
+                run_zellij kill-session "$name"
             fi
             echo -e "${GREEN}✓${NC} Session ${CYAN}${name}${NC} killed"
         fi
@@ -670,11 +807,25 @@ open_project() {
         if [[ "$inside_zellij" == "false" && -n "$tool" ]]; then
             zellij_ensure_background_session "$name" "$path"
 
-            if ! zellij --session "$name" action go-to-tab-name "$tool" >/dev/null 2>&1; then
-                if ! zellij --session "$name" action new-tab --name "$tool" --cwd "$path" -- "$tool" >/dev/null 2>&1; then
+            if ! run_zellij --session "$name" action go-to-tab-name "$tool" >/dev/null 2>&1; then
+                local created_tool_tab=false
+                if run_zellij --session "$name" action new-tab --name "$tool" --cwd "$path" >/dev/null 2>&1; then
+                    created_tool_tab=true
+                else
                     zellij_ensure_background_session "$name" "$path"
-                    if ! zellij --session "$name" action new-tab --name "$tool" --cwd "$path" -- "$tool" >/dev/null 2>&1; then
+                    if run_zellij --session "$name" action new-tab --name "$tool" --cwd "$path" >/dev/null 2>&1; then
+                        created_tool_tab=true
+                    else
                         echo -e "  ${YELLOW}!${NC} ${DIM}Could not pre-create zellij tab '${tool}'; attaching anyway${NC}"
+                    fi
+                fi
+
+                if [[ "$created_tool_tab" == "true" ]]; then
+                    run_zellij --session "$name" action go-to-tab-name "$tool" >/dev/null 2>&1 || true
+                    if ! run_zellij --session "$name" action new-pane --in-place --cwd "$path" -- "$tool" >/dev/null 2>&1; then
+                        # Fallback: type into the tab's shell if in-place launch is unavailable.
+                        run_zellij --session "$name" action write-chars "$tool" >/dev/null 2>&1 || true
+                        run_zellij --session "$name" action write 10 >/dev/null 2>&1 || true
                     fi
                 fi
             fi
@@ -684,12 +835,19 @@ open_project() {
 
         # Inside zellij, switch first (which also creates the session if missing), then add/focus tool tab.
         if [[ "$inside_zellij" == "true" && -n "$tool" ]]; then
-            if ! zellij action go-to-tab-name "$tool" >/dev/null 2>&1; then
-                if ! zellij action new-tab --name "$tool" --cwd "$path" -- "$tool" >/dev/null 2>&1; then
+            if ! run_zellij action go-to-tab-name "$tool" >/dev/null 2>&1; then
+                if run_zellij action new-tab --name "$tool" --cwd "$path" >/dev/null 2>&1; then
+                    run_zellij action go-to-tab-name "$tool" >/dev/null 2>&1 || true
+                    if ! run_zellij action new-pane --in-place --cwd "$path" -- "$tool" >/dev/null 2>&1; then
+                        # Fallback: type into the tab's shell if in-place launch is unavailable.
+                        run_zellij action write-chars "$tool" >/dev/null 2>&1 || true
+                        run_zellij action write 10 >/dev/null 2>&1 || true
+                    fi
+                else
                     echo -e "  ${YELLOW}!${NC} ${DIM}Could not create zellij tab '${tool}' in session '${name}'${NC}"
                 fi
             fi
-            zellij action go-to-tab-name "$tool" >/dev/null 2>&1 || true
+            run_zellij action go-to-tab-name "$tool" >/dev/null 2>&1 || true
         fi
     fi
 }

@@ -1,0 +1,27 @@
+// vaibhav zellij.kdl — mobile-friendly defaults
+// Install (done by setup-desktop.sh):
+//   ~/.config/zellij/config.kdl -> ~/projects/vaibhav/zellij.kdl
+
+// Better rendering on narrow Termux/mobile screens
+simplified_ui true
+pane_frames false
+default_layout "compact"
+show_startup_tips false
+show_release_notes false
+
+// Keep mouse/touch interactions enabled
+mouse_mode true
+
+// Convenience keys similar to tmux mobile workflow
+keybinds {
+    shared_except "locked" {
+        bind "Alt n" { GoToNextTab; }
+        bind "Alt p" { GoToPreviousTab; }
+        bind "Alt s" {
+            LaunchOrFocusPlugin "session-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+        }
+    }
+}

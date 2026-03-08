@@ -55,15 +55,59 @@ if command -v zellij &>/dev/null; then
 else
     read -rp "  Install zellij as an alternative to tmux? [y/N] " yn
     if [[ "$yn" =~ ^[Yy]$ ]]; then
-        if sudo apt-get update -qq && sudo apt-get install -y -qq zellij; then
-            ok "zellij installed"
+        CARGO_BIN=""
+        if command -v cargo &>/dev/null; then
+            CARGO_BIN="$(command -v cargo)"
+        elif [[ -x "$HOME/.cargo/bin/cargo" ]]; then
+            CARGO_BIN="$HOME/.cargo/bin/cargo"
+            export PATH="$HOME/.cargo/bin:$PATH"
         else
-            warn "Could not install zellij — install manually if needed"
+            warn "cargo not found — installing Rust toolchain with rustup"
+            if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; then
+                if [[ -f "$HOME/.cargo/env" ]]; then
+                    # shellcheck source=/dev/null
+                    source "$HOME/.cargo/env"
+                else
+                    export PATH="$HOME/.cargo/bin:$PATH"
+                fi
+                CARGO_BIN="$(command -v cargo 2>/dev/null || true)"
+            else
+                warn "rustup install failed"
+            fi
+        fi
+
+        if [[ -n "$CARGO_BIN" ]]; then
+            if "$CARGO_BIN" install --locked zellij; then
+                export PATH="$HOME/.cargo/bin:$PATH"
+                hash -r
+                if command -v zellij &>/dev/null; then
+                    ok "zellij installed ($(zellij --version 2>/dev/null || echo 'version unknown'))"
+                elif [[ -x "$HOME/.cargo/bin/zellij" ]]; then
+                    ok "zellij installed at $HOME/.cargo/bin/zellij"
+                else
+                    warn "cargo install completed but zellij is not in PATH"
+                fi
+            else
+                warn "Could not install zellij — run manually: cargo install --locked zellij"
+            fi
+        else
+            warn "cargo unavailable — install Rust first: https://rustup.rs"
         fi
     else
-        skip "zellij (can install later with: sudo apt install zellij)"
+        skip "zellij (can install later with: cargo install --locked zellij)"
     fi
 fi
+
+# --- zellij config ---
+step "Linking zellij config (mobile-friendly)"
+mkdir -p "$HOME/.config/zellij"
+if [[ -f "$HOME/.config/zellij/config.kdl" ]] && [[ ! -L "$HOME/.config/zellij/config.kdl" ]]; then
+    backup="$HOME/.config/zellij/config.kdl.backup.$(date +%s)"
+    cp "$HOME/.config/zellij/config.kdl" "$backup"
+    warn "Backed up existing ~/.config/zellij/config.kdl to $backup"
+fi
+ln -sf "$SCRIPT_DIR/zellij.kdl" "$HOME/.config/zellij/config.kdl"
+ok "$HOME/.config/zellij/config.kdl → $SCRIPT_DIR/zellij.kdl"
 
 # --- SSH server ---
 step "Checking SSH server"

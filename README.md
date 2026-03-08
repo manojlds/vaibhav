@@ -21,7 +21,8 @@ cd ~/projects/vaibhav
 
 This will:
 - Install and configure tmux (default multiplexer)
-- Optionally install zellij (alternative multiplexer)
+- Optionally install zellij via Cargo (`cargo install --locked zellij`)
+- Link a mobile-friendly zellij config (`~/.config/zellij/config.kdl`)
 - Optionally set up OpenCode Web as a systemd service (localhost-only, with `tailscale serve` for HTTPS access)
 - Install the `vaibhav` command
 - Set up SSH server
@@ -91,7 +92,9 @@ Once inside tmux, you can switch projects without disconnecting:
 
 #### zellij
 
-- Use `Ctrl+o` then `w` to open Zellij's built-in session manager.
+- Use `Alt+s` to open Zellij's session manager popup (mobile shortcut).
+- Use `Ctrl+o` then `w` for the default Zellij session manager flow.
+- Use `Alt+n` / `Alt+p` for next/previous tab.
 - Use `vaibhav <project> <tool>` to open/focus a project session and add tool tabs.
 
 ## Configuration
@@ -106,6 +109,7 @@ VAIBHAV_LAN_HOST="mypc.local"                 # Optional LAN target (mDNS hostna
 VAIBHAV_USE_MOSH="false"                      # Use mosh by default (true/false)
 VAIBHAV_MOSH_NO_INIT="true"                   # Pass --no-init to mosh (better touch scroll in Termux)
 VAIBHAV_MULTIPLEXER="auto"                    # tmux | zellij | auto (auto prefers tmux, then zellij)
+VAIBHAV_ZELLIJ_BIN="/home/user/.cargo/bin/zellij" # Optional explicit zellij path if not on PATH
 ```
 
 Project registry is stored at `~/.config/vaibhav/projects`.
@@ -158,6 +162,7 @@ vaibhav/
 │   ├── prd-skill.md     # PRD writing skill
 │   └── prd-convert.md   # PRD → prd.json converter
 ├── tmux.conf            # tmux configuration (mobile-optimized)
+├── zellij.kdl           # zellij configuration (mobile-optimized)
 ├── setup-desktop.sh     # Ubuntu desktop setup
 ├── setup-termux.sh      # Android Termux setup
 ├── RALPH.md             # Ralph loop documentation
@@ -173,5 +178,7 @@ vaibhav/
 - **Pinch to zoom** in Termux to adjust text size for comfortable reading on your phone
 - **FiraCode Nerd Font** is installed during Termux setup for proper icon rendering (starship, etc.)
 - **tmux clipboard**: Use copy mode (`Ctrl+b` then `[` or `Alt+u`), select, then `Enter` or `y`; vaibhav's tmux config sends copied text to your local clipboard via OSC 52
-- **zellij switching**: Use `Ctrl+o` then `w` for session manager inside zellij
+- **zellij switching**: Use `Alt+s` (vaibhav mobile shortcut) or `Ctrl+o` then `w`
+- **zellij mobile rendering**: vaibhav ships `zellij.kdl` with `simplified_ui`, no pane frames, and compact layout for narrow screens
 - **After updating tmux.conf**: If tmux is already running, reload once with `tmux source-file ~/.tmux.conf`
+- **After updating zellij.kdl**: Restart zellij sessions to pick up new config

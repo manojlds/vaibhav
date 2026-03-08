@@ -29,4 +29,5 @@ jobs:
             bin/vaibhav
             bin/vaibhav-ralph
             tmux.conf
+            zellij.kdl
             checksums.sha256
