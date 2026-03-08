@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.8.3"
+VAIBHAV_VERSION="0.8.4"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -810,18 +810,25 @@ open_project() {
             if ! mux_target_exists "$name" "$tool"; then
                 (
                     # Retries handle race conditions between session creation and attach.
-                    for _try in $(seq 1 40); do
-                        if run_zellij --session "$name" action go-to-tab-name "$tool" >/dev/null 2>&1 || \
-                           run_zellij --session "$name" action new-tab --name "$tool" --cwd "$path" >/dev/null 2>&1; then
-                            run_zellij --session "$name" action go-to-tab-name "$tool" >/dev/null 2>&1 || true
+                    for _try in $(seq 1 60); do
+                        # Ensure tool tab exists.
+                        if ! run_zellij --session "$name" action go-to-tab-name "$tool" >/dev/null 2>&1; then
+                            run_zellij --session "$name" action new-tab --name "$tool" --cwd "$path" >/dev/null 2>&1 || true
+                            sleep 0.2
+                            continue
+                        fi
 
-                            if ! run_zellij --session "$name" action new-pane --in-place --cwd "$path" -- "$tool" >/dev/null 2>&1; then
-                                # Fallback: type into the tab's shell if in-place launch is unavailable.
-                                run_zellij --session "$name" action write-chars "$tool" >/dev/null 2>&1 || true
-                                run_zellij --session "$name" action write 10 >/dev/null 2>&1 || true
-                            fi
+                        # Launch tool in-place in the focused pane of the tool tab.
+                        if run_zellij --session "$name" action new-pane --in-place --cwd "$path" -- "$tool" >/dev/null 2>&1; then
                             break
                         fi
+
+                        # Fallback: type into the tab's shell if in-place launch is unavailable.
+                        if run_zellij --session "$name" action write-chars "$tool" >/dev/null 2>&1 && \
+                           run_zellij --session "$name" action write 10 >/dev/null 2>&1; then
+                            break
+                        fi
+
                         sleep 0.2
                     done
                 ) >/dev/null 2>&1 &
