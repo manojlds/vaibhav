@@ -18,9 +18,12 @@ keybinds {
         bind "Alt n" { GoToNextTab; }
         bind "Alt p" { GoToPreviousTab; }
         bind "Alt s" {
-            LaunchOrFocusPlugin "session-manager" {
+            Run "bash" {
+                args "-lc" "$HOME/bin/vaibhav-switcher"
                 floating true
-                move_to_focused_tab true
+                close_on_exit true
+                width "95%"
+                height "80%"
             }
         }
     }

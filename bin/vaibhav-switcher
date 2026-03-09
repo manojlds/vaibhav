@@ -1,44 +1,193 @@
 #!/usr/bin/env bash
-# vaibhav-switcher — fuzzy project switcher for tmux
-# Shows active sessions and registered projects. Fuzzy-find with fzf.
+# vaibhav-switcher — fuzzy project/session switcher for tmux and zellij
 # Active sessions: switch / kill. Inactive projects: pick a tool and start.
-# Called from tmux keybinding (Alt+s); do NOT run directly.
+# Intended to be launched from multiplexer keybindings (Alt+s).
 set -euo pipefail
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 PROJECTS_FILE="$CONFIG_DIR/projects"
 
-if ! command -v fzf &>/dev/null; then
-    tmux display-message "fzf not found. Install with: sudo apt install fzf"
+BACKEND=""
+if [[ "${1:-}" == "--backend" ]]; then
+    if [[ $# -lt 2 ]]; then
+        echo "Error: --backend requires tmux or zellij" >&2
+        exit 1
+    fi
+    BACKEND="$2"
+    shift 2
+fi
+
+if [[ -z "$BACKEND" ]]; then
+    if [[ -n "${TMUX:-}" ]]; then
+        BACKEND="tmux"
+    elif [[ -n "${ZELLIJ:-}" ]]; then
+        BACKEND="zellij"
+    else
+        echo "Error: not inside tmux or zellij" >&2
+        exit 1
+    fi
+fi
+
+if [[ "$BACKEND" != "tmux" && "$BACKEND" != "zellij" ]]; then
+    echo "Error: unsupported backend '$BACKEND'" >&2
+    exit 1
+fi
+
+notify() {
+    local msg="$1"
+    case "$BACKEND" in
+        tmux)
+            tmux display-message "$msg" || true
+            ;;
+        zellij)
+            echo "$msg" >&2
+            ;;
+    esac
+}
+
+if ! command -v fzf >/dev/null 2>&1; then
+    notify "fzf not found. Install with: sudo apt install fzf"
     exit 0
 fi
 
 if [[ ! -f "$PROJECTS_FILE" ]]; then
-    tmux display-message "No projects file. Run: vaibhav init"
+    notify "No projects file. Run: vaibhav init"
     exit 0
 fi
+
+list_sessions() {
+    case "$BACKEND" in
+        tmux)
+            tmux list-sessions -F '#{session_name}' 2>/dev/null || true
+            ;;
+        zellij)
+            zellij list-sessions --no-formatting 2>/dev/null |
+                awk '
+                    /^[[:space:]]*$/ { next }
+                    /No active sessions/ { next }
+                    /\(EXITED/ { next }
+                    { print $1 }
+                ' || true
+            ;;
+    esac
+}
+
+list_targets() {
+    local session="$1"
+    case "$BACKEND" in
+        tmux)
+            tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
+            ;;
+        zellij)
+            zellij --session "$session" action query-tab-names 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
+            ;;
+    esac
+}
+
+current_session_name() {
+    case "$BACKEND" in
+        tmux)
+            tmux display-message -p '#{session_name}' 2>/dev/null || true
+            ;;
+        zellij)
+            printf '%s\n' "${ZELLIJ_SESSION_NAME:-}"
+            ;;
+    esac
+}
+
+is_active_session() {
+    local session="$1"
+    list_sessions | grep -qx "$session" 2>/dev/null
+}
+
+kill_session() {
+    local session="$1"
+    case "$BACKEND" in
+        tmux)
+            tmux kill-session -t "$session"
+            ;;
+        zellij)
+            zellij kill-session "$session"
+            ;;
+    esac
+}
+
+detach_current() {
+    case "$BACKEND" in
+        tmux)
+            tmux detach-client
+            ;;
+        zellij)
+            zellij action detach
+            ;;
+    esac
+}
+
+switch_session() {
+    local session="$1"
+    local current_session="$2"
+
+    case "$BACKEND" in
+        tmux)
+            tmux switch-client -t "$session"
+            ;;
+        zellij)
+            [[ "$session" == "$current_session" ]] && return 0
+            (
+                sleep 0.15
+                env -u ZELLIJ -u ZELLIJ_SESSION_NAME zellij attach "$session"
+            ) >/dev/null 2>&1 &
+            zellij action detach
+            ;;
+    esac
+}
+
+start_project() {
+    local project_name="$1"
+    local tool="${2:-}"
+
+    case "$BACKEND" in
+        tmux)
+            if [[ -n "$tool" ]]; then
+                tmux run-shell -b "$HOME/bin/vaibhav '$project_name' '$tool'"
+            else
+                tmux run-shell -b "$HOME/bin/vaibhav '$project_name'"
+            fi
+            ;;
+        zellij)
+            (
+                sleep 0.15
+                if [[ -n "$tool" ]]; then
+                    env -u ZELLIJ -u ZELLIJ_SESSION_NAME "$HOME/bin/vaibhav" "$project_name" "$tool"
+                else
+                    env -u ZELLIJ -u ZELLIJ_SESSION_NAME "$HOME/bin/vaibhav" "$project_name"
+                fi
+            ) >/dev/null 2>&1 &
+            zellij action detach
+            ;;
+    esac
+}
 
 build_entries() {
     local current_session="$1"
 
-    # Collect active tmux sessions
-    declare -A active_sessions
+    declare -A active_sessions=()
     while IFS= read -r session; do
-        windows=$(tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
-        active_sessions["$session"]="$windows"
-    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null | sort)
+        [[ -z "$session" ]] && continue
+        active_sessions["$session"]="$(list_targets "$session")"
+    done < <(list_sessions | sort)
 
     for session in $(printf '%s\n' "${!active_sessions[@]}" | sort); do
-        windows="${active_sessions[$session]}"
-        if [[ "$session" == "$current_session" ]]; then
-            echo "● $session  [$windows]"
+        local targets="${active_sessions[$session]}"
+        if [[ -n "$current_session" && "$session" == "$current_session" ]]; then
+            echo "● $session  [$targets]"
         else
-            echo "▸ $session  [$windows]"
+            echo "▸ $session  [$targets]"
         fi
     done
 
     while IFS='=' read -r name path; do
-        [[ -z "$name" ]] && continue
+        [[ -z "$name" || "$name" == \#* ]] && continue
         if [[ -z "${active_sessions[$name]+_}" ]]; then
             echo "  $name  ($path)"
         fi
@@ -49,16 +198,27 @@ build_entries() {
     echo "✕ Kill all sessions"
 }
 
+pick_tool() {
+    local project_name="$1"
+    local tools=("shell (no tool)" "amp" "claude" "codex" "opencode" "pi")
+
+    printf '%s\n' "${tools[@]}" | \
+        fzf --header=" Start $project_name — pick a tool" \
+            --prompt=" tool> " \
+            --reverse \
+        || true
+}
+
 while true; do
-    current_session=$(tmux display-message -p '#{session_name}')
-    entries=$(build_entries "$current_session")
+    current_session="$(current_session_name)"
+    entries="$(build_entries "$current_session")"
 
     if [[ -z "$entries" ]]; then
-        tmux display-message "No projects found"
+        notify "No projects found"
         exit 0
     fi
 
-    result=$(echo "$entries" | \
+    result=$(printf '%s\n' "$entries" | \
         fzf --header=" vaibhav  │  Enter: switch/start  │  Ctrl-X: kill session" \
             --prompt=" project> " \
             --reverse \
@@ -71,71 +231,58 @@ while true; do
 
     key=$(head -1 <<< "$result")
     selected=$(tail -1 <<< "$result")
-
     [[ -z "$selected" ]] && exit 0
 
-    # Handle detach
     if [[ "$selected" == "⏏ Detach" ]]; then
-        tmux detach-client
+        detach_current
         exit 0
     fi
 
-    # Handle kill all
     if [[ "$selected" == "✕ Kill all sessions" ]]; then
         killed=0
         while IFS= read -r session; do
-            if [[ "$session" != "$current_session" ]]; then
-                if tmux kill-session -t "$session" 2>/dev/null; then
-                    ((killed++))
-                fi
+            [[ -z "$session" ]] && continue
+            if [[ -n "$current_session" && "$session" == "$current_session" ]]; then
+                continue
             fi
-        done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null)
-        tmux display-message "Killed $killed session(s) (kept current: $current_session)"
+            if kill_session "$session" 2>/dev/null; then
+                killed=$((killed + 1))
+            fi
+        done < <(list_sessions)
+        notify "Killed $killed session(s)${current_session:+ (kept current: $current_session)}"
         exit 0
     fi
 
-    # Extract project name
-    project_name=$(echo "$selected" | sed 's/^[● ▸]*//' | awk '{print $1}')
+    project_name=$(printf '%s\n' "$selected" | sed -E 's/^[[:space:]●▸]*//' | awk '{print $1}')
     [[ -z "$project_name" ]] && exit 0
 
-    # Check if this is an active session
     is_active=false
-    tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -qx "$project_name" && is_active=true
+    is_active_session "$project_name" && is_active=true
 
     if [[ "$key" == "ctrl-x" ]]; then
         if [[ "$is_active" == "true" ]]; then
-            if [[ "$project_name" == "$current_session" ]]; then
-                # Can't kill current — loop back
-                tmux display-message "Cannot kill current session"
+            if [[ -n "$current_session" && "$project_name" == "$current_session" ]]; then
+                notify "Cannot kill current session"
                 sleep 0.5
             else
-                tmux kill-session -t "$project_name"
+                kill_session "$project_name" || true
             fi
         fi
-        # Loop back to picker
         continue
     fi
 
-    # Enter key
     if [[ "$is_active" == "true" ]]; then
-        tmux switch-client -t "$project_name"
-        exit 0
-    else
-        # Inactive project — ask which tool to run
-        tools=("shell (no tool)" "amp" "claude" "codex" "opencode" "pi")
-        tool_choice=$(printf '%s\n' "${tools[@]}" | \
-            fzf --header=" Start $project_name — pick a tool" \
-                --prompt=" tool> " \
-                --reverse \
-            || true)
-
-        [[ -z "$tool_choice" ]] && exit 0
-
-        if [[ "$tool_choice" == "shell (no tool)" ]]; then
-            tmux run-shell -b "$HOME/bin/vaibhav '$project_name'"
-        else
-            tmux run-shell -b "$HOME/bin/vaibhav '$project_name' '$tool_choice'"
-        fi
+        switch_session "$project_name" "$current_session"
         exit 0
     fi
+
+    tool_choice="$(pick_tool "$project_name")"
+    [[ -z "$tool_choice" ]] && exit 0
+
+    if [[ "$tool_choice" == "shell (no tool)" ]]; then
+        start_project "$project_name"
+    else
+        start_project "$project_name" "$tool_choice"
+    fi
+    exit 0
 done

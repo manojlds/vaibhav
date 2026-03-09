@@ -255,7 +255,7 @@ echo "  • Swipe left edge of screen → toggle extra keys"
 echo "  • Pinch to zoom text size"
 echo "  • Closing Termux keeps sessions alive on desktop"
 echo "  • tmux: Alt+s opens the session switcher"
-echo "  • zellij: Alt+s opens session manager (or Ctrl+o then w)"
+echo "  • zellij: Alt+s opens the vaibhav switcher (or Ctrl+o then w for native manager)"
 if [[ -n "$LAN_HOST" ]]; then
     echo "  • SSH auto-switches: LAN (${LAN_HOST}) first, then Tailscale (${DESKTOP_HOST})"
 fi

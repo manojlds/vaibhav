@@ -92,8 +92,8 @@ Once inside tmux, you can switch projects without disconnecting:
 
 #### zellij
 
-- Use `Alt+s` to open Zellij's session manager popup (mobile shortcut).
-- Use `Ctrl+o` then `w` for the default Zellij session manager flow.
+- Use `Alt+s` to open the vaibhav switcher popup (same fuzzy switcher style as tmux).
+- Use `Ctrl+o` then `w` for Zellij's built-in session manager when needed.
 - Use `Alt+n` / `Alt+p` for next/previous tab.
 - Use `vaibhav <project> <tool>` to open/focus a project session and add tool tabs.
 
@@ -180,7 +180,7 @@ vaibhav/
 - **Pinch to zoom** in Termux to adjust text size for comfortable reading on your phone
 - **FiraCode Nerd Font** is installed during Termux setup for proper icon rendering (starship, etc.)
 - **tmux clipboard**: Use copy mode (`Ctrl+b` then `[` or `Alt+u`), select, then `Enter` or `y`; vaibhav's tmux config sends copied text to your local clipboard via OSC 52
-- **zellij switching**: Use `Alt+s` (vaibhav mobile shortcut) or `Ctrl+o` then `w`
+- **zellij switching**: Use `Alt+s` (vaibhav fuzzy switcher) or `Ctrl+o` then `w`
 - **zellij mobile rendering**: vaibhav ships `zellij.kdl` with `simplified_ui`, no pane frames, and compact layout for narrow screens
 - **After updating tmux.conf**: If tmux is already running, reload once with `tmux source-file ~/.tmux.conf`
 - **After updating zellij.kdl**: Restart zellij sessions to pick up new config
