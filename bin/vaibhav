@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.8.5"
+VAIBHAV_VERSION="0.8.6"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -804,7 +804,7 @@ open_project() {
         [[ -n "${ZELLIJ:-}" ]] && inside_zellij=true
 
         if [[ "$inside_zellij" == "false" ]]; then
-            if run_zellij list-sessions 2>/dev/null | grep -q "^${name}\$"; then
+            if mux_session_exists "$name"; then
                 # Session already exists — queue tool tab creation then attach.
                 if [[ -n "$tool" ]] && ! mux_target_exists "$name" "$tool"; then
                     (
@@ -853,7 +853,7 @@ LAYOUT_EOF
                 (
                     cd "$path"
                     if [[ -n "$layout_file" ]]; then
-                        run_zellij --session "$name" --layout "$layout_file"
+                        run_zellij -s "$name" --new-session-with-layout "$layout_file"
                         rm -f "$layout_file"
                     else
                         run_zellij attach --create "$name"
