@@ -11,8 +11,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Files to checksum (paths relative to repo root)
 FILES=(
-    "bin/vaibhav"
+    "dist/vaibhav"
     "bin/vaibhav-ralph"
+    "bin/vaibhav-switcher"
     "tmux.conf"
     "zellij.kdl"
 )

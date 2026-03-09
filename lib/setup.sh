@@ -285,6 +285,9 @@ update_termux() {
 
     local download_base="${GITHUB_RELEASES_BASE}/latest/download"
 
+    # Release artifacts: dist/vaibhav (bundled), bin/vaibhav-ralph, bin/vaibhav-switcher
+    local artifacts=("vaibhav" "vaibhav-ralph" "vaibhav-switcher")
+
     if ! curl -fsSL "${download_base}/vaibhav" -o "$tmp_dir/vaibhav"; then
         echo -e "${RED}Error:${NC} Failed to download latest vaibhav"
         return 1
@@ -309,26 +312,32 @@ update_termux() {
         return 0
     fi
 
-    if ! curl -fsSL "${download_base}/vaibhav-ralph" -o "$tmp_dir/vaibhav-ralph"; then
-        echo -e "${RED}Error:${NC} Failed to download vaibhav-ralph"
-        return 1
-    fi
+    for artifact in "${artifacts[@]}"; do
+        [[ "$artifact" == "vaibhav" ]] && continue  # already downloaded
+        if ! curl -fsSL "${download_base}/${artifact}" -o "$tmp_dir/${artifact}"; then
+            echo -e "${RED}Error:${NC} Failed to download ${artifact}"
+            return 1
+        fi
+    done
 
     if ! curl -fsSL "${download_base}/checksums.sha256" -o "$tmp_dir/checksums.sha256"; then
         echo -e "${RED}Error:${NC} Failed to download checksums.sha256"
         return 1
     fi
 
-    mkdir -p "$tmp_dir/verify/bin"
-    cp "$tmp_dir/vaibhav" "$tmp_dir/verify/bin/vaibhav"
+    # Verify checksums — map release paths to downloaded files
+    mkdir -p "$tmp_dir/verify/dist" "$tmp_dir/verify/bin"
+    cp "$tmp_dir/vaibhav" "$tmp_dir/verify/dist/vaibhav"
     cp "$tmp_dir/vaibhav-ralph" "$tmp_dir/verify/bin/vaibhav-ralph"
+    cp "$tmp_dir/vaibhav-switcher" "$tmp_dir/verify/bin/vaibhav-switcher"
 
     local checksum_ok=true
     while read -r expected_hash filepath; do
         case "$filepath" in
-            bin/*) ;;
+            dist/*|bin/*) ;;
             *) continue ;;
         esac
+        [[ ! -f "$tmp_dir/verify/$filepath" ]] && continue
         local actual_hash
         actual_hash=$(sha256sum "$tmp_dir/verify/$filepath" | cut -d' ' -f1)
         if [[ "$expected_hash" != "$actual_hash" ]]; then
@@ -346,12 +355,11 @@ update_termux() {
 
     # Stage in ~/bin so mv is same-filesystem (atomic rename, preserves old inode)
     # cp would overwrite inode contents while bash is still reading this script
-    cp "$tmp_dir/vaibhav" "$HOME/bin/vaibhav.new"
-    chmod +x "$HOME/bin/vaibhav.new"
-    mv -f "$HOME/bin/vaibhav.new" "$HOME/bin/vaibhav"
-    cp "$tmp_dir/vaibhav-ralph" "$HOME/bin/vaibhav-ralph.new"
-    chmod +x "$HOME/bin/vaibhav-ralph.new"
-    mv -f "$HOME/bin/vaibhav-ralph.new" "$HOME/bin/vaibhav-ralph"
+    for artifact in "${artifacts[@]}"; do
+        cp "$tmp_dir/$artifact" "$HOME/bin/${artifact}.new"
+        chmod +x "$HOME/bin/${artifact}.new"
+        mv -f "$HOME/bin/${artifact}.new" "$HOME/bin/${artifact}"
+    done
 
     echo -e "${GREEN}✓${NC} Updated: v${old_version} → v${remote_version}"
     return 0

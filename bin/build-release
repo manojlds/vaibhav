@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# build-release — Bundle bin/vaibhav + lib/*.sh into a single self-contained script
+# Usage: bin/build-release
+# Output: dist/vaibhav (single file suitable for Termux ~/bin/vaibhav)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+SRC="$REPO_ROOT/bin/vaibhav"
+LIB_DIR="$REPO_ROOT/lib"
+DIST_DIR="$REPO_ROOT/dist"
+
+mkdir -p "$DIST_DIR"
+
+{
+    while IFS= read -r line; do
+        # Skip the VAIBHAV_LIB resolution line
+        if [[ "$line" == *'VAIBHAV_LIB="$(cd'* ]]; then
+            continue
+        fi
+
+        # Inline source directives for lib modules
+        if [[ "$line" =~ ^source\ \"\$VAIBHAV_LIB/(.+)\"$ ]]; then
+            lib_file="${BASH_REMATCH[1]}"
+            echo ""
+            echo "# --- inlined: lib/$lib_file ---"
+            # Skip shellcheck directives and blank lines at top of lib file
+            sed '/^# shellcheck shell=bash$/d' "$LIB_DIR/$lib_file"
+            echo "# --- end: lib/$lib_file ---"
+            continue
+        fi
+
+        # Skip shellcheck source= comments for lib modules (the line before source)
+        if [[ "$line" =~ ^#\ shellcheck\ source=\.\./lib/ ]]; then
+            continue
+        fi
+
+        # Skip the "Resolve lib directory" comment
+        if [[ "$line" == "# Resolve lib directory"* ]]; then
+            continue
+        fi
+
+        # Skip "Source library modules" / "Source remaining modules" section comments
+        if [[ "$line" == "# --- Source library modules ---" ]]; then
+            continue
+        fi
+        if [[ "$line" == "# --- Source remaining modules"* ]]; then
+            continue
+        fi
+
+        echo "$line"
+    done < "$SRC"
+} > "$DIST_DIR/vaibhav"
+
+chmod +x "$DIST_DIR/vaibhav"
+
+# Verify the bundled script is valid bash
+if bash -n "$DIST_DIR/vaibhav"; then
+    echo "✓ dist/vaibhav built ($(wc -l < "$DIST_DIR/vaibhav") lines)"
+else
+    echo "✗ dist/vaibhav has syntax errors" >&2
+    exit 1
+fi
