@@ -23,7 +23,7 @@ keybinds {
                 close_on_exit true
                 width "95%"
                 height "80%"
-                x "2.5%"
+                x "2%"
                 y "10%"
             }
         }
