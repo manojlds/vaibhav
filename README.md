@@ -143,6 +143,8 @@ vaibhav ralph status                        # Check progress
 
 Works from your phone too — use `-p` to target any project:
 
+> On Termux, `vaibhav ralph ...` is forwarded to your desktop; the phone install only needs the main `vaibhav` wrapper.
+
 ```bash
 vaibhav ralph -p myapp status
 vaibhav ralph -p myapp run --max-iterations 3

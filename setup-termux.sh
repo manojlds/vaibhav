@@ -211,7 +211,7 @@ EOF
 ok "Config saved to $CONFIG_DIR/config"
 
 # --- Run vaibhav setup for environment config ---
-# This handles: mosh, vaibhav-ralph, PATH, extra keys, font
+# This handles: mosh, PATH, extra keys, font
 echo ""
 "$HOME/bin/vaibhav" setup
 

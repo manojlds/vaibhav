@@ -11,7 +11,7 @@ vaibhav update
 ```
 
 This does three things:
-1. Downloads latest `bin/vaibhav` and `bin/vaibhav-ralph` from the latest GitHub Release
+1. Downloads latest `vaibhav` wrapper script from the latest GitHub Release
 2. Verifies SHA256 checksums before replacing files
 3. SSHes to your desktop and runs `git pull` to update there too
 
@@ -39,7 +39,7 @@ vaibhav update
   ├─ Same version?
   │   └─ "Already up to date (v0.3.0)" → done
   │
-  ├─ Download release assets (vaibhav, vaibhav-ralph, checksums.sha256)
+  ├─ Download release assets (vaibhav, checksums.sha256)
   ├─ Verify SHA256 checksums of downloaded files
   │   ├─ Mismatch? → abort, keep old files
   │   └─ Match? → continue

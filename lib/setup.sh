@@ -188,21 +188,6 @@ EOF
         fi
     fi
 
-    # --- vaibhav-ralph ---
-    step "Checking vaibhav-ralph"
-    if [[ -x "$HOME/bin/vaibhav-ralph" ]]; then
-        ok "vaibhav-ralph installed"
-    else
-        echo -e "  ${DIM}Downloading vaibhav-ralph...${NC}"
-        local ralph_url="https://raw.githubusercontent.com/manojlds/vaibhav/main/bin/vaibhav-ralph"
-        if curl -fsSL "$ralph_url" -o "$HOME/bin/vaibhav-ralph"; then
-            chmod +x "$HOME/bin/vaibhav-ralph"
-            ok "vaibhav-ralph installed"
-        else
-            echo -e "  ${YELLOW}!${NC} Failed to download vaibhav-ralph (non-fatal)"
-        fi
-    fi
-
     # --- Shell PATH ---
     step "Checking PATH"
     local shell_rc="$HOME/.bashrc"
@@ -285,9 +270,9 @@ update_termux() {
 
     local download_base="${GITHUB_RELEASES_BASE}/latest/download"
 
-    # Phone release artifacts: dist/vaibhav (bundled), bin/vaibhav-ralph
-    # vaibhav-switcher is desktop-only (tmux popup), so we don't install it on Termux.
-    local artifacts=("vaibhav" "vaibhav-ralph")
+    # Phone release artifact: dist/vaibhav (bundled wrapper/dispatcher script).
+    # Desktop-only binaries (vaibhav-switcher, vaibhav-ralph) are not needed on Termux.
+    local artifacts=("vaibhav")
 
     if ! curl -fsSL "${download_base}/vaibhav" -o "$tmp_dir/vaibhav"; then
         echo -e "${RED}Error:${NC} Failed to download latest vaibhav"
@@ -327,9 +312,8 @@ update_termux() {
     fi
 
     # Verify checksums — map release paths to downloaded files
-    mkdir -p "$tmp_dir/verify/dist" "$tmp_dir/verify/bin"
+    mkdir -p "$tmp_dir/verify/dist"
     cp "$tmp_dir/vaibhav" "$tmp_dir/verify/dist/vaibhav"
-    cp "$tmp_dir/vaibhav-ralph" "$tmp_dir/verify/bin/vaibhav-ralph"
 
     local checksum_ok=true
     while read -r expected_hash filepath; do
