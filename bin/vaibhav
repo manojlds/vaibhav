@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-VAIBHAV_VERSION="0.8.6"
+VAIBHAV_VERSION="0.8.7"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -833,6 +833,11 @@ open_project() {
                     run_zellij attach "$name"
                 )
             else
+                # Clean up dead/exited session with the same name if it exists.
+                if run_zellij list-sessions --no-formatting 2>/dev/null | grep -q "^${name} .*EXITED"; then
+                    run_zellij delete-session "$name" >/dev/null 2>&1 || true
+                fi
+
                 # Session doesn't exist — create it with a layout that includes the tool.
                 local layout_file=""
                 if [[ -n "$tool" ]]; then
@@ -840,6 +845,15 @@ open_project() {
                     cat > "$layout_file" <<LAYOUT_EOF
 layout {
     cwd "$path"
+    default_tab_template {
+        pane size=1 borderless=true {
+            plugin location="tab-bar"
+        }
+        children
+        pane size=1 borderless=true {
+            plugin location="status-bar"
+        }
+    }
     tab name="shell" {
         pane
     }
