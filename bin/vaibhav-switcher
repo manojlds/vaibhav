@@ -194,8 +194,8 @@ build_entries() {
     done < "$PROJECTS_FILE"
 
     echo ""
-    echo "⏏ Detach"
     echo "✕ Kill all sessions"
+    echo "⏏ Detach"
 }
 
 pick_tool() {
