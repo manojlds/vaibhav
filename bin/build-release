@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# build-release — Bundle bin/vaibhav + lib/*.sh into a single self-contained script
+# build-release — Bundle a lean phone-only vaibhav script for Termux
+# Inlines only the lib modules needed on the phone (remote dispatch,
+# setup, update, doctor, init, ui). Skips mux.sh, projects.sh, and
+# desktop-only functions (update_desktop) since they run on the desktop.
 # Usage: bin/build-release
-# Output: dist/vaibhav (single file suitable for Termux ~/bin/vaibhav)
+# Output: dist/vaibhav
 
 set -euo pipefail
 
@@ -13,6 +16,26 @@ LIB_DIR="$REPO_ROOT/lib"
 DIST_DIR="$REPO_ROOT/dist"
 
 mkdir -p "$DIST_DIR"
+
+# Desktop-only functions to strip from inlined libs
+DESKTOP_ONLY_FUNCTIONS=(update_desktop)
+
+strip_functions() {
+    # Remove named functions from stdin
+    # Handles function_name() { ... } blocks (brace-matching)
+    local input
+    input=$(cat)
+    for func in "${DESKTOP_ONLY_FUNCTIONS[@]}"; do
+        input=$(echo "$input" | awk -v fname="$func" '
+            $0 ~ "^" fname "\\(\\)" { skip=1; depth=0 }
+            skip && /\{/ { depth += gsub(/\{/, "{") }
+            skip && /\}/ { depth -= gsub(/\}/, "}"); if (depth <= 0) { skip=0; next } }
+            skip { next }
+            { print }
+        ')
+    done
+    echo "$input"
+}
 
 {
     while IFS= read -r line; do
@@ -26,23 +49,25 @@ mkdir -p "$DIST_DIR"
             lib_file="${BASH_REMATCH[1]}"
             echo ""
             echo "# --- inlined: lib/$lib_file ---"
-            # Skip shellcheck directives and blank lines at top of lib file
-            sed '/^# shellcheck shell=bash$/d' "$LIB_DIR/$lib_file"
+            # Strip shell directive; strip desktop-only functions from setup.sh
+            if [[ "$lib_file" == "setup.sh" ]]; then
+                sed '/^# shellcheck shell=bash$/d' "$LIB_DIR/$lib_file" | strip_functions
+            else
+                sed '/^# shellcheck shell=bash$/d' "$LIB_DIR/$lib_file"
+            fi
             echo "# --- end: lib/$lib_file ---"
             continue
         fi
 
-        # Skip shellcheck source= comments for lib modules (the line before source)
+        # Skip shellcheck source= comments for lib modules
         if [[ "$line" =~ ^#\ shellcheck\ source=\.\./lib/ ]]; then
             continue
         fi
 
-        # Skip the "Resolve lib directory" comment
+        # Skip section comments about sourcing
         if [[ "$line" == "# Resolve lib directory"* ]]; then
             continue
         fi
-
-        # Skip "Source library modules" / "Source remaining modules" section comments
         if [[ "$line" == "# --- Source library modules ---" ]]; then
             continue
         fi
