@@ -18,12 +18,13 @@ keybinds {
         bind "Alt n" { GoToNextTab; }
         bind "Alt p" { GoToPreviousTab; }
         bind "Alt s" {
-            Run "bash" {
-                args "-lc" "$HOME/bin/vaibhav-switcher"
+            Run "bash" "-lc" "$HOME/bin/vaibhav-switcher --backend zellij" {
                 floating true
                 close_on_exit true
                 width "95%"
                 height "80%"
+                x "2.5%"
+                y "10%"
             }
         }
     }
