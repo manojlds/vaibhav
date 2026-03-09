@@ -1,39 +1,141 @@
 #!/usr/bin/env bash
-# vaibhav-switcher — tmux project switcher menu
-# Generates a tmux display-menu command showing active sessions with their tools.
-# Called from tmux keybinding; do NOT run directly.
+# vaibhav-switcher — fuzzy project switcher for tmux
+# Shows active sessions and registered projects. Fuzzy-find with fzf.
+# Active sessions: switch / kill. Inactive projects: pick a tool and start.
+# Called from tmux keybinding (Alt+s); do NOT run directly.
 set -euo pipefail
 
-current_session=$(tmux display-message -p '#{session_name}')
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
+PROJECTS_FILE="$CONFIG_DIR/projects"
 
-menu_args=()
-menu_args+=("Switch" "" "")
-menu_args+=("" "" "")
+if ! command -v fzf &>/dev/null; then
+    tmux display-message "fzf not found. Install with: sudo apt install fzf"
+    exit 0
+fi
 
-while IFS= read -r session; do
-    # Get window names (tools) for this session
-    windows=$(tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+if [[ ! -f "$PROJECTS_FILE" ]]; then
+    tmux display-message "No projects file. Run: vaibhav init"
+    exit 0
+fi
 
-    if [[ "$session" == "$current_session" ]]; then
-        label="● $session  [$windows]"
-    else
-        label="  $session  [$windows]"
+build_entries() {
+    local current_session="$1"
+
+    # Collect active tmux sessions
+    declare -A active_sessions
+    while IFS= read -r session; do
+        windows=$(tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+        active_sessions["$session"]="$windows"
+    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null | sort)
+
+    for session in $(printf '%s\n' "${!active_sessions[@]}" | sort); do
+        windows="${active_sessions[$session]}"
+        if [[ "$session" == "$current_session" ]]; then
+            echo "● $session  [$windows]"
+        else
+            echo "▸ $session  [$windows]"
+        fi
+    done
+
+    while IFS='=' read -r name path; do
+        [[ -z "$name" ]] && continue
+        if [[ -z "${active_sessions[$name]+_}" ]]; then
+            echo "  $name  ($path)"
+        fi
+    done < "$PROJECTS_FILE"
+
+    echo ""
+    echo "⏏ Detach"
+    echo "✕ Kill all sessions"
+}
+
+while true; do
+    current_session=$(tmux display-message -p '#{session_name}')
+    entries=$(build_entries "$current_session")
+
+    if [[ -z "$entries" ]]; then
+        tmux display-message "No projects found"
+        exit 0
     fi
 
-    menu_args+=("$label" "" "switch-client -t '$session'")
-done < <(tmux list-sessions -F '#{session_name}' | sort)
+    result=$(echo "$entries" | \
+        fzf --header=" vaibhav  │  Enter: switch/start  │  Ctrl-X: kill session" \
+            --prompt=" project> " \
+            --reverse \
+            --no-sort \
+            --cycle \
+            --expect=ctrl-x \
+        || true)
 
-menu_args+=("" "" "")
-menu_args+=("Close" "" "")
-menu_args+=("" "" "")
+    [[ -z "$result" ]] && exit 0
 
-while IFS= read -r session; do
-    windows=$(tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
-    label="  ✕ $session  [$windows]"
-    menu_args+=("$label" "" "confirm-before -p 'Kill $session? (y/n)' 'kill-session -t \"$session\"'")
-done < <(tmux list-sessions -F '#{session_name}' | sort)
+    key=$(head -1 <<< "$result")
+    selected=$(tail -1 <<< "$result")
 
-menu_args+=("" "" "")
-menu_args+=("  Detach" "" "detach-client")
+    [[ -z "$selected" ]] && exit 0
 
-tmux display-menu -T "#[fg=cyan,bold] vaibhav " -x C -y C "${menu_args[@]}"
+    # Handle detach
+    if [[ "$selected" == "⏏ Detach" ]]; then
+        tmux detach-client
+        exit 0
+    fi
+
+    # Handle kill all
+    if [[ "$selected" == "✕ Kill all sessions" ]]; then
+        killed=0
+        while IFS= read -r session; do
+            if [[ "$session" != "$current_session" ]]; then
+                if tmux kill-session -t "$session" 2>/dev/null; then
+                    ((killed++))
+                fi
+            fi
+        done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null)
+        tmux display-message "Killed $killed session(s) (kept current: $current_session)"
+        exit 0
+    fi
+
+    # Extract project name
+    project_name=$(echo "$selected" | sed 's/^[● ▸]*//' | awk '{print $1}')
+    [[ -z "$project_name" ]] && exit 0
+
+    # Check if this is an active session
+    is_active=false
+    tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -qx "$project_name" && is_active=true
+
+    if [[ "$key" == "ctrl-x" ]]; then
+        if [[ "$is_active" == "true" ]]; then
+            if [[ "$project_name" == "$current_session" ]]; then
+                # Can't kill current — loop back
+                tmux display-message "Cannot kill current session"
+                sleep 0.5
+            else
+                tmux kill-session -t "$project_name"
+            fi
+        fi
+        # Loop back to picker
+        continue
+    fi
+
+    # Enter key
+    if [[ "$is_active" == "true" ]]; then
+        tmux switch-client -t "$project_name"
+        exit 0
+    else
+        # Inactive project — ask which tool to run
+        tools=("shell (no tool)" "amp" "claude" "codex" "opencode" "pi")
+        tool_choice=$(printf '%s\n' "${tools[@]}" | \
+            fzf --header=" Start $project_name — pick a tool" \
+                --prompt=" tool> " \
+                --reverse \
+            || true)
+
+        [[ -z "$tool_choice" ]] && exit 0
+
+        if [[ "$tool_choice" == "shell (no tool)" ]]; then
+            tmux run-shell -b "$HOME/bin/vaibhav '$project_name'"
+        else
+            tmux run-shell -b "$HOME/bin/vaibhav '$project_name' '$tool_choice'"
+        fi
+        exit 0
+    fi
+done
