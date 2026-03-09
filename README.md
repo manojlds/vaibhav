@@ -42,7 +42,7 @@ The setup will:
 - Install OpenSSH (and optionally mosh)
 - Generate an SSH key and copy it to your desktop (via `ssh-copy-id`)
 - Configure SSH connection to your desktop
-- Download and install the `vaibhav` command
+- Download and checksum-verify the latest `vaibhav` release command
 - Configure remote mode
 - Set up extra keyboard keys for coding
 - Optionally install FiraCode Nerd Font for proper icon rendering

@@ -13,7 +13,30 @@ if [[ -n "${VAIBHAV_LAN_HOST:-}" ]] && ping -c 1 -W 2 "$VAIBHAV_LAN_HOST" >/dev/
     _VSSH_OPTS=(-o "HostName=$VAIBHAV_LAN_HOST")
 fi
 
-if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
+vaibhav_is_current_host_desktop() {
+    local configured="${VAIBHAV_DESKTOP_HOST:-}"
+    [[ -z "$configured" ]] && return 1
+
+    configured=$(printf '%s' "$configured" | tr '[:upper:]' '[:lower:]')
+    configured="${configured%.}"
+    local configured_short="${configured%%.*}"
+
+    local current=""
+    for current in "$(hostname 2>/dev/null || true)" "$(hostname -s 2>/dev/null || true)" "$(hostname -f 2>/dev/null || true)"; do
+        [[ -z "$current" ]] && continue
+        current=$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')
+        current="${current%.}"
+        local current_short="${current%%.*}"
+
+        if [[ "$current" == "$configured" ]] || [[ "$current" == "$configured_short" ]] || [[ "$current_short" == "$configured" ]] || [[ "$current_short" == "$configured_short" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && ! vaibhav_is_current_host_desktop; then
     echo -e "${BOLD}vaibhav${NC} ${DIM}v${VAIBHAV_VERSION}${NC}"
 
     # Check for --mosh flag

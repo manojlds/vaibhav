@@ -151,7 +151,7 @@ case "${1:-}" in
         setup_termux "${@:2}"
         ;;
     update)
-        if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && [[ "$(hostname)" != "$VAIBHAV_DESKTOP_HOST" ]]; then
+        if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && ! vaibhav_is_current_host_desktop; then
             update_termux
             # Run setup with the newly updated vaibhav to apply any new setup steps
             "$HOME/bin/vaibhav" setup --post-update || true

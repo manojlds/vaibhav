@@ -193,8 +193,35 @@ fi
 step "Installing vaibhav command"
 mkdir -p ~/bin
 
-curl -fsSL "https://raw.githubusercontent.com/manojlds/vaibhav/main/bin/vaibhav" -o ~/bin/vaibhav
-chmod +x ~/bin/vaibhav
+RELEASE_BASE="https://github.com/manojlds/vaibhav/releases/latest/download"
+TMP_INSTALL_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_INSTALL_DIR"' EXIT
+
+if ! curl -fsSL "${RELEASE_BASE}/vaibhav" -o "$TMP_INSTALL_DIR/vaibhav"; then
+    warn "Failed to download vaibhav from latest release"
+    exit 1
+fi
+if ! curl -fsSL "${RELEASE_BASE}/checksums.sha256" -o "$TMP_INSTALL_DIR/checksums.sha256"; then
+    warn "Failed to download checksums.sha256 from latest release"
+    exit 1
+fi
+
+EXPECTED_HASH=$(awk '$2=="dist/vaibhav" {print $1; exit}' "$TMP_INSTALL_DIR/checksums.sha256")
+if [[ -z "$EXPECTED_HASH" ]]; then
+    warn "checksums.sha256 is missing dist/vaibhav"
+    exit 1
+fi
+
+ACTUAL_HASH=$(sha256sum "$TMP_INSTALL_DIR/vaibhav" | cut -d' ' -f1)
+if [[ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]]; then
+    warn "Checksum verification failed for vaibhav"
+    echo "  expected: $EXPECTED_HASH"
+    echo "  got:      $ACTUAL_HASH"
+    exit 1
+fi
+
+mv "$TMP_INSTALL_DIR/vaibhav" "$HOME/bin/vaibhav"
+chmod +x "$HOME/bin/vaibhav"
 ok "$HOME/bin/vaibhav installed"
 
 # --- Configure vaibhav for remote mode ---

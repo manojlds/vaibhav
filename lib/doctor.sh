@@ -216,7 +216,11 @@ show_doctor() {
     local alias_configured=false
 
     local on_desktop=false
-    if [[ -n "${VAIBHAV_DESKTOP_HOST:-}" ]] && [[ "$(hostname)" == "$VAIBHAV_DESKTOP_HOST" ]]; then
+    if declare -F vaibhav_is_current_host_desktop >/dev/null 2>&1; then
+        if vaibhav_is_current_host_desktop; then
+            on_desktop=true
+        fi
+    elif [[ -n "${VAIBHAV_DESKTOP_HOST:-}" ]] && [[ "$(hostname)" == "$VAIBHAV_DESKTOP_HOST" ]]; then
         on_desktop=true
     fi
 
