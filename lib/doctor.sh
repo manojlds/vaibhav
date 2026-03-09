@@ -1,89 +1,350 @@
 # shellcheck shell=bash
 # vaibhav/lib/doctor.sh — Doctor, web status, refresh, and network helpers
 
-show_web_status() {
-    local url_only=false
-    for arg in "$@"; do
-        [[ "$arg" == "--url-only" ]] && url_only=true
-    done
+parse_service_port_from_unit() {
+    local service_file="$1"
+    local default_port="$2"
 
-    # Check if opencode-web service is running
-    local service_active=false
-    if systemctl --user is-active --quiet opencode-web 2>/dev/null; then
-        service_active=true
-    fi
-
-    # Get port from the service file
-    local port=4096
-    local service_file="$HOME/.config/systemd/user/opencode-web.service"
+    local parsed_port=""
     if [[ -f "$service_file" ]]; then
-        local parsed_port
-        parsed_port=$(grep -o -- '--port [0-9]*' "$service_file" | awk '{print $2}')
-        if [[ -n "$parsed_port" ]]; then
-            port="$parsed_port"
-        fi
+        parsed_port=$(grep -o -- '--port [0-9]*' "$service_file" 2>/dev/null | awk '{print $2}' | head -n1 || true)
     fi
 
-    # Get tailscale serve URL
-    local ts_url=""
-    if command -v tailscale &>/dev/null; then
-        local ts_hostname
-        ts_hostname=$(tailscale status --json 2>/dev/null | grep -m1 '"DNSName"' | grep -o '"DNSName": *"[^"]*"' | cut -d'"' -f4 | sed 's/\.$//')
-        if [[ -n "$ts_hostname" ]]; then
-            # Check tailscale serve status for the actual external port
-            local ts_port
-            ts_port=$(tailscale serve status --json 2>/dev/null | grep -o '"https://[^"]*"' | head -1 | grep -o ':[0-9]*' | tr -d ':' || true)
-            if [[ -z "$ts_port" || "$ts_port" == "443" ]]; then
-                ts_url="https://${ts_hostname}"
-            else
-                ts_url="https://${ts_hostname}:${ts_port}"
-            fi
-        fi
-    fi
+    printf '%s\n' "${parsed_port:-$default_port}"
+}
 
-    if [[ "$url_only" == "true" ]]; then
-        if [[ -n "$ts_url" ]]; then
-            echo "$ts_url"
-        else
-            echo "http://127.0.0.1:${port}"
-        fi
+get_tailscale_serve_url_for_proxy() {
+    local proxy_url="$1"
+
+    if ! command -v tailscale &>/dev/null; then
         return 0
     fi
+
+    local serve_json=""
+    serve_json=$(tailscale serve status --json 2>/dev/null || true)
+    if [[ -z "$serve_json" ]]; then
+        return 0
+    fi
+
+    local hostport=""
+    if command -v python3 &>/dev/null; then
+        hostport=$(printf '%s' "$serve_json" | python3 -c '
+import json
+import sys
+
+target = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+
+for host, meta in (data.get("Web") or {}).items():
+    handlers = (meta or {}).get("Handlers") or {}
+    for handler in handlers.values():
+        if isinstance(handler, dict) and handler.get("Proxy") == target:
+            print(host)
+            raise SystemExit(0)
+' "$proxy_url" 2>/dev/null || true)
+    fi
+
+    if [[ -z "$hostport" ]]; then
+        hostport=$(printf '%s\n' "$serve_json" | awk -v target="$proxy_url" '
+            match($0, /"([^"]+)"[[:space:]]*:[[:space:]]*\{/, m) {
+                if (m[1] ~ /:[0-9]+$/) {
+                    current = m[1]
+                }
+            }
+            index($0, "\"Proxy\": \"" target "\"") > 0 {
+                print current
+                exit
+            }
+        ' 2>/dev/null || true)
+    fi
+
+    if [[ -z "$hostport" ]]; then
+        return 0
+    fi
+
+    if [[ "$hostport" == *":443" ]]; then
+        printf 'https://%s\n' "${hostport%:443}"
+    else
+        printf 'https://%s\n' "$hostport"
+    fi
+}
+
+opencode_web_local_url() {
+    local service_file="$HOME/.config/systemd/user/opencode-web.service"
+    local port
+    port=$(parse_service_port_from_unit "$service_file" "4096")
+    printf 'http://127.0.0.1:%s\n' "$port"
+}
+
+zellij_web_local_url() {
+    local service_file="$HOME/.config/systemd/user/zellij-web.service"
+    local port
+    port=$(parse_service_port_from_unit "$service_file" "8082")
+    printf 'http://127.0.0.1:%s\n' "$port"
+}
+
+opencode_web_effective_url() {
+    local local_url
+    local_url=$(opencode_web_local_url)
+    local ts_url
+    ts_url=$(get_tailscale_serve_url_for_proxy "$local_url")
+
+    if [[ -n "$ts_url" ]]; then
+        printf '%s\n' "$ts_url"
+    else
+        printf '%s\n' "$local_url"
+    fi
+}
+
+zellij_web_effective_url() {
+    local local_url
+    local_url=$(zellij_web_local_url)
+    local ts_url
+    ts_url=$(get_tailscale_serve_url_for_proxy "$local_url")
+
+    if [[ -n "$ts_url" ]]; then
+        printf '%s\n' "$ts_url"
+    else
+        printf '%s\n' "$local_url"
+    fi
+}
+
+print_opencode_web_status() {
+    local service_name="opencode-web"
+    local service_file="$HOME/.config/systemd/user/opencode-web.service"
+    local local_url
+    local_url=$(opencode_web_local_url)
+    local ts_url
+    ts_url=$(get_tailscale_serve_url_for_proxy "$local_url")
 
     echo -e "${BOLD}OpenCode Web${NC}"
     echo ""
 
-    # Service status
-    if [[ "$service_active" == "true" ]]; then
-        echo -e "  Service:  ${GREEN}running${NC}"
-        local health
-        health=$(curl -sf "http://127.0.0.1:${port}/global/health" 2>/dev/null || echo "")
-        if [[ -n "$health" ]]; then
-            echo -e "  Health:   ${GREEN}healthy${NC}"
+    if [[ -f "$service_file" ]]; then
+        if systemctl --user is-active --quiet "$service_name" 2>/dev/null; then
+            echo -e "  Service:  ${GREEN}running${NC}"
+            local health
+            health=$(curl -sf "${local_url}/global/health" 2>/dev/null || echo "")
+            if [[ -n "$health" ]]; then
+                echo -e "  Health:   ${GREEN}healthy${NC}"
+            else
+                echo -e "  Health:   ${RED}unreachable${NC}"
+            fi
         else
-            echo -e "  Health:   ${RED}unreachable${NC}"
+            echo -e "  Service:  ${RED}stopped${NC}"
+            echo -e "  ${DIM}Start with: vaibhav web opencode start${NC}"
         fi
     else
-        echo -e "  Service:  ${RED}stopped${NC}"
-        echo -e "  ${DIM}Start with: systemctl --user start opencode-web${NC}"
-        echo -e "  ${DIM}Or re-run:  ./setup-desktop.sh${NC}"
-        return 0
+        echo -e "  Service:  ${DIM}not configured${NC}"
+        echo -e "  ${DIM}Set up via: ./setup-desktop.sh${NC}"
     fi
 
-    # URLs
-    echo -e "  Local:    ${CYAN}http://127.0.0.1:${port}${NC}"
+    echo -e "  Local:    ${CYAN}${local_url}${NC}"
     if [[ -n "$ts_url" ]]; then
         echo -e "  Tailscale:${BOLD} ${ts_url}${NC}"
     else
         echo -e "  Tailscale:${DIM} not configured${NC}"
     fi
 
-    # Password hint
     if [[ -f "$service_file" ]] && grep -q 'OPENCODE_SERVER_PASSWORD' "$service_file"; then
         echo -e "  Password: ${DIM}set (see systemd unit)${NC}"
     fi
 
     echo ""
+}
+
+print_zellij_web_status() {
+    local service_name="zellij-web"
+    local service_file="$HOME/.config/systemd/user/zellij-web.service"
+    local local_url
+    local_url=$(zellij_web_local_url)
+    local ts_url
+    ts_url=$(get_tailscale_serve_url_for_proxy "$local_url")
+
+    echo -e "${BOLD}Zellij Web${NC}"
+    echo ""
+
+    if [[ -f "$service_file" ]]; then
+        if systemctl --user is-active --quiet "$service_name" 2>/dev/null; then
+            echo -e "  Service:  ${GREEN}running${NC}"
+            if command -v zellij &>/dev/null; then
+                local web_status
+                web_status=$(zellij web --status 2>/dev/null || true)
+                if echo "$web_status" | grep -qi 'online'; then
+                    echo -e "  Health:   ${GREEN}healthy${NC}"
+                else
+                    echo -e "  Health:   ${RED}unreachable${NC}"
+                fi
+            else
+                echo -e "  Health:   ${YELLOW}unknown${NC} ${DIM}(zellij binary not found)${NC}"
+            fi
+        else
+            echo -e "  Service:  ${RED}stopped${NC}"
+            echo -e "  ${DIM}Start with: vaibhav web zellij start${NC}"
+        fi
+    else
+        echo -e "  Service:  ${DIM}not configured${NC}"
+        echo -e "  ${DIM}Set up via: ./setup-desktop.sh${NC}"
+    fi
+
+    echo -e "  Local:    ${CYAN}${local_url}${NC}"
+    if [[ -n "$ts_url" ]]; then
+        echo -e "  Tailscale:${BOLD} ${ts_url}${NC}"
+    else
+        echo -e "  Tailscale:${DIM} not configured${NC}"
+    fi
+
+    if command -v zellij &>/dev/null; then
+        echo -e "  Token:    ${DIM}create with: vaibhav web zellij token${NC}"
+    fi
+
+    echo ""
+}
+
+show_web_usage() {
+    echo -e "${BOLD}vaibhav web${NC}"
+    echo ""
+    echo "Usage:"
+    echo "  vaibhav web                         Show OpenCode + Zellij web status"
+    echo "  vaibhav web opencode               Show OpenCode Web status"
+    echo "  vaibhav web zellij               Show Zellij Web status"
+    echo "  vaibhav web <service> <action>    Manage service"
+    echo ""
+    echo "Services: opencode | zellij"
+    echo "Actions:  status | start | stop | restart"
+    echo "          zellij also supports: token | tokens"
+    echo ""
+    echo "Flags:"
+    echo "  --url-only            Print OpenCode Web URL only"
+    echo "  --zellij-url-only     Print Zellij Web URL only"
+}
+
+web_service_control() {
+    local target="$1"
+    local action="$2"
+
+    case "$target" in
+        opencode)
+            local op_service_file="$HOME/.config/systemd/user/opencode-web.service"
+            if [[ ! -f "$op_service_file" ]]; then
+                echo -e "${YELLOW}Warning:${NC} OpenCode Web service is not configured. Run ./setup-desktop.sh"
+                return 1
+            fi
+            ;;
+        zellij)
+            local zj_service_file="$HOME/.config/systemd/user/zellij-web.service"
+            if [[ "$action" == "token" ]]; then
+                if ! command -v zellij &>/dev/null; then
+                    echo -e "${RED}Error:${NC} zellij not found"
+                    return 1
+                fi
+                zellij web --create-token
+                return 0
+            fi
+            if [[ "$action" == "tokens" ]]; then
+                if ! command -v zellij &>/dev/null; then
+                    echo -e "${RED}Error:${NC} zellij not found"
+                    return 1
+                fi
+                zellij web --list-tokens
+                return 0
+            fi
+            if [[ ! -f "$zj_service_file" ]]; then
+                echo -e "${YELLOW}Warning:${NC} Zellij Web service is not configured. Run ./setup-desktop.sh"
+                return 1
+            fi
+            ;;
+        *)
+            echo -e "${RED}Error:${NC} Unknown web service '${target}'"
+            return 1
+            ;;
+    esac
+
+    if ! systemctl --user "$action" "${target}-web" >/dev/null 2>&1; then
+        echo -e "${RED}Error:${NC} Failed to ${action} ${target}-web"
+        return 1
+    fi
+
+    echo -e "${GREEN}✓${NC} ${target}-web ${action}"
+    return 0
+}
+
+show_web_status() {
+    local target=""
+    local action="status"
+    local url_only=false
+    local zellij_url_only=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --url-only)
+                url_only=true
+                ;;
+            --zellij-url-only)
+                zellij_url_only=true
+                ;;
+            opencode|zellij)
+                target="$1"
+                ;;
+            status|start|stop|restart|token|tokens)
+                action="$1"
+                ;;
+            help|-h|--help)
+                show_web_usage
+                return 0
+                ;;
+            *)
+                echo -e "${RED}Error:${NC} Unknown argument '$1'"
+                show_web_usage
+                return 1
+                ;;
+        esac
+        shift
+    done
+
+    if [[ "$zellij_url_only" == "true" ]]; then
+        echo "$(zellij_web_effective_url)"
+        return 0
+    fi
+
+    if [[ "$url_only" == "true" ]]; then
+        if [[ "$target" == "zellij" ]]; then
+            echo "$(zellij_web_effective_url)"
+        else
+            echo "$(opencode_web_effective_url)"
+        fi
+        return 0
+    fi
+
+    if [[ "$action" != "status" ]]; then
+        if [[ -z "$target" ]]; then
+            echo -e "${RED}Error:${NC} Specify a service (opencode|zellij) for action '${action}'"
+            show_web_usage
+            return 1
+        fi
+        web_service_control "$target" "$action" || return 1
+        echo ""
+    fi
+
+    case "$target" in
+        opencode)
+            print_opencode_web_status
+            ;;
+        zellij)
+            print_zellij_web_status
+            ;;
+        "")
+            print_opencode_web_status
+            print_zellij_web_status
+            ;;
+        *)
+            echo -e "${RED}Error:${NC} Unknown web service '${target}'"
+            return 1
+            ;;
+    esac
 }
 
 is_ipv4() {

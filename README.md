@@ -23,7 +23,7 @@ This will:
 - Install and configure tmux (default multiplexer)
 - Optionally install zellij via Cargo (`cargo install --locked zellij`)
 - Link a mobile-friendly zellij config (`~/.config/zellij/config.kdl`)
-- Optionally set up OpenCode Web as a systemd service (localhost-only, with `tailscale serve` for HTTPS access)
+- Optionally set up OpenCode Web and Zellij Web as systemd services (localhost-only, with `tailscale serve` for HTTPS access)
 - Install the `vaibhav` command
 - Set up SSH server
 - Optionally install mosh for resilient mobile connections
@@ -64,6 +64,8 @@ vaibhav scan                # Auto-register all projects in configured directory
 vaibhav scan ~/other        # Scan a specific directory
 vaibhav doctor              # Show current LAN vs Tailscale routing
 vaibhav refresh             # Detect desktop LAN IP over SSH and save VAIBHAV_LAN_HOST
+vaibhav web                 # Show OpenCode Web + Zellij Web status/URLs
+vaibhav web zellij token    # Create a Zellij Web login token
 vaibhav --version           # Check installed version
 ```
 
@@ -128,6 +130,20 @@ Your configured `VAIBHAV_MULTIPLEXER` value is preserved across updates on both 
 Use `vaibhav refresh` on Termux (while connected via Tailscale) to detect and save your desktop LAN IP into `VAIBHAV_LAN_HOST`, then use `vaibhav doctor` to verify whether SSH will route to LAN or Tailscale.
 
 See [UPDATE.md](UPDATE.md) for the full details on the update process, checksum verification, and troubleshooting.
+
+## Web services
+
+`vaibhav web` manages remote web UIs on your desktop via systemd user services:
+
+```bash
+vaibhav web                 # Show OpenCode Web + Zellij Web status and URLs
+vaibhav web opencode start  # Start OpenCode Web service
+vaibhav web opencode stop   # Stop OpenCode Web service
+vaibhav web zellij start    # Start Zellij Web service
+vaibhav web zellij token    # Create one-time login token for Zellij Web
+```
+
+`vaibhav web --url-only` prints the OpenCode URL only (used by setup scripts), and `vaibhav web --zellij-url-only` prints the Zellij Web URL only.
 
 ## Ralph loop
 

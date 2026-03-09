@@ -33,7 +33,7 @@ show_usage() {
     echo "  vaibhav kill <name> <win>   Kill a specific window/tab in a project"
     echo "  vaibhav remove <name>       Unregister a project"
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
-    echo "  vaibhav web                 Show OpenCode Web status and URL"
+    echo "  vaibhav web                 Show/manage OpenCode Web + Zellij Web services"
     echo "  vaibhav doctor              Check SSH routing (LAN vs Tailscale)"
     echo "  vaibhav refresh             Detect desktop LAN IP and save it to config"
     echo "  vaibhav doctor --refresh-lan  Same as refresh + doctor output"
