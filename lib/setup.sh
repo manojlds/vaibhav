@@ -285,8 +285,9 @@ update_termux() {
 
     local download_base="${GITHUB_RELEASES_BASE}/latest/download"
 
-    # Release artifacts: dist/vaibhav (bundled), bin/vaibhav-ralph, bin/vaibhav-switcher
-    local artifacts=("vaibhav" "vaibhav-ralph" "vaibhav-switcher")
+    # Phone release artifacts: dist/vaibhav (bundled), bin/vaibhav-ralph
+    # vaibhav-switcher is desktop-only (tmux popup), so we don't install it on Termux.
+    local artifacts=("vaibhav" "vaibhav-ralph")
 
     if ! curl -fsSL "${download_base}/vaibhav" -o "$tmp_dir/vaibhav"; then
         echo -e "${RED}Error:${NC} Failed to download latest vaibhav"
@@ -329,7 +330,6 @@ update_termux() {
     mkdir -p "$tmp_dir/verify/dist" "$tmp_dir/verify/bin"
     cp "$tmp_dir/vaibhav" "$tmp_dir/verify/dist/vaibhav"
     cp "$tmp_dir/vaibhav-ralph" "$tmp_dir/verify/bin/vaibhav-ralph"
-    cp "$tmp_dir/vaibhav-switcher" "$tmp_dir/verify/bin/vaibhav-switcher"
 
     local checksum_ok=true
     while read -r expected_hash filepath; do

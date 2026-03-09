@@ -13,7 +13,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FILES=(
     "dist/vaibhav"
     "bin/vaibhav-ralph"
-    "bin/vaibhav-switcher"
     "tmux.conf"
     "zellij.kdl"
 )
