@@ -133,11 +133,7 @@ switch_session() {
             ;;
         zellij)
             [[ "$session" == "$current_session" ]] && return 0
-            (
-                sleep 0.15
-                env -u ZELLIJ -u ZELLIJ_SESSION_NAME zellij attach "$session"
-            ) >/dev/null 2>&1 &
-            zellij action detach
+            zellij action switch-session "$session"
             ;;
     esac
 }
@@ -155,15 +151,13 @@ start_project() {
             fi
             ;;
         zellij)
-            (
-                sleep 0.15
-                if [[ -n "$tool" ]]; then
-                    env -u ZELLIJ -u ZELLIJ_SESSION_NAME "$HOME/bin/vaibhav" "$project_name" "$tool"
-                else
-                    env -u ZELLIJ -u ZELLIJ_SESSION_NAME "$HOME/bin/vaibhav" "$project_name"
-                fi
-            ) >/dev/null 2>&1 &
-            zellij action detach
+            if [[ -n "$tool" ]]; then
+                env -u ZELLIJ -u ZELLIJ_SESSION_NAME "$HOME/bin/vaibhav" "$project_name" "$tool" &
+            else
+                env -u ZELLIJ -u ZELLIJ_SESSION_NAME "$HOME/bin/vaibhav" "$project_name" &
+            fi
+            sleep 0.5
+            zellij action switch-session "$project_name"
             ;;
     esac
 }

@@ -215,7 +215,7 @@ PATHBLOCK
             cat > ~/.termux/termux.properties << 'PROPS'
 # Extra keys row for multiplexer shortcuts and coding
 extra-keys = [ \
-  ['ESC', 'CTRL', 'ALT', 'TAB', '|', '-', 'UP', 'DOWN'] \
+  ['ESC', 'CTRL', 'ALT', 'TAB', 'LEFT', 'RIGHT', 'UP', 'DOWN'] \
 ]
 PROPS
             ok "Extra keyboard row configured"
@@ -226,7 +226,7 @@ PROPS
             cat >> ~/.termux/termux.properties << 'PROPS'
 # Extra keys row for multiplexer shortcuts and coding
 extra-keys = [ \
-  ['ESC', 'CTRL', 'ALT', 'TAB', '|', '-', 'UP', 'DOWN'] \
+  ['ESC', 'CTRL', 'ALT', 'TAB', 'LEFT', 'RIGHT', 'UP', 'DOWN'] \
 ]
 PROPS
             ok "Extra keyboard row added"
