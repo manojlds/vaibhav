@@ -112,6 +112,26 @@ zellij_web_effective_url() {
     fi
 }
 
+files_local_url() {
+    local service_file="$HOME/.config/systemd/user/vaibhav-files.service"
+    local port
+    port=$(parse_service_port_from_unit "$service_file" "9090")
+    printf 'http://127.0.0.1:%s\n' "$port"
+}
+
+files_effective_url() {
+    local local_url
+    local_url=$(files_local_url)
+    local ts_url
+    ts_url=$(get_tailscale_serve_url_for_proxy "$local_url")
+
+    if [[ -n "$ts_url" ]]; then
+        printf '%s\n' "$ts_url"
+    else
+        printf '%s\n' "$local_url"
+    fi
+}
+
 print_opencode_web_status() {
     local service_name="opencode-web"
     local service_file="$HOME/.config/systemd/user/opencode-web.service"
@@ -204,6 +224,51 @@ print_zellij_web_status() {
     echo ""
 }
 
+print_files_status() {
+    local service_name="vaibhav-files"
+    local service_file="$HOME/.config/systemd/user/vaibhav-files.service"
+    local local_url
+    local_url=$(files_local_url)
+    local ts_url
+    ts_url=$(get_tailscale_serve_url_for_proxy "$local_url")
+    local share_dir="$HOME/vaibhav-share"
+
+    echo -e "${BOLD}Vaibhav Files${NC}"
+    echo ""
+
+    if [[ -f "$service_file" ]]; then
+        if systemctl --user is-active --quiet "$service_name" 2>/dev/null; then
+            echo -e "  Service:  ${GREEN}running${NC}"
+            if curl -sf "${local_url}/" >/dev/null 2>&1; then
+                echo -e "  Health:   ${GREEN}healthy${NC}"
+            else
+                echo -e "  Health:   ${RED}unreachable${NC}"
+            fi
+        else
+            echo -e "  Service:  ${RED}stopped${NC}"
+            echo -e "  ${DIM}Start with: vaibhav web files start${NC}"
+        fi
+    else
+        echo -e "  Service:  ${DIM}not configured${NC}"
+        echo -e "  ${DIM}Set up via: ./setup-desktop.sh${NC}"
+    fi
+
+    echo -e "  Local:    ${CYAN}${local_url}${NC}"
+    if [[ -n "$ts_url" ]]; then
+        echo -e "  Tailscale:${BOLD} ${ts_url}${NC}"
+    else
+        echo -e "  Tailscale:${DIM} not configured${NC}"
+    fi
+
+    if [[ -d "$share_dir" ]]; then
+        local file_count
+        file_count=$(find "$share_dir" -type f 2>/dev/null | wc -l)
+        echo -e "  Directory:${DIM} ${share_dir} (${file_count} files)${NC}"
+    fi
+
+    echo ""
+}
+
 show_web_usage() {
     echo -e "${BOLD}vaibhav web${NC}"
     echo ""
@@ -213,13 +278,14 @@ show_web_usage() {
     echo "  vaibhav web zellij               Show Zellij Web status"
     echo "  vaibhav web <service> <action>    Manage service"
     echo ""
-    echo "Services: opencode | zellij"
+    echo "Services: opencode | zellij | files"
     echo "Actions:  status | start | stop | restart"
     echo "          zellij also supports: token | tokens"
     echo ""
     echo "Flags:"
     echo "  --url-only            Print OpenCode Web URL only"
     echo "  --zellij-url-only     Print Zellij Web URL only"
+    echo "  --files-url-only      Print Vaibhav Files URL only"
 }
 
 web_service_control() {
@@ -257,18 +323,31 @@ web_service_control() {
                 return 1
             fi
             ;;
+        files)
+            local files_service_file="$HOME/.config/systemd/user/vaibhav-files.service"
+            if [[ ! -f "$files_service_file" ]]; then
+                echo -e "${YELLOW}Warning:${NC} Vaibhav Files service is not configured. Run ./setup-desktop.sh"
+                return 1
+            fi
+            ;;
         *)
             echo -e "${RED}Error:${NC} Unknown web service '${target}'"
             return 1
             ;;
     esac
 
-    if ! systemctl --user "$action" "${target}-web" >/dev/null 2>&1; then
-        echo -e "${RED}Error:${NC} Failed to ${action} ${target}-web"
+    local service_name
+    case "$target" in
+        files) service_name="vaibhav-files" ;;
+        *) service_name="${target}-web" ;;
+    esac
+
+    if ! systemctl --user "$action" "$service_name" >/dev/null 2>&1; then
+        echo -e "${RED}Error:${NC} Failed to ${action} ${service_name}"
         return 1
     fi
 
-    echo -e "${GREEN}✓${NC} ${target}-web ${action}"
+    echo -e "${GREEN}✓${NC} ${service_name} ${action}"
     return 0
 }
 
@@ -277,6 +356,7 @@ show_web_status() {
     local action="status"
     local url_only=false
     local zellij_url_only=false
+    local files_url_only=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -286,7 +366,10 @@ show_web_status() {
             --zellij-url-only)
                 zellij_url_only=true
                 ;;
-            opencode|zellij)
+            --files-url-only)
+                files_url_only=true
+                ;;
+            opencode|zellij|files)
                 target="$1"
                 ;;
             status|start|stop|restart|token|tokens)
@@ -310,9 +393,16 @@ show_web_status() {
         return 0
     fi
 
+    if [[ "$files_url_only" == "true" ]]; then
+        echo "$(files_effective_url)"
+        return 0
+    fi
+
     if [[ "$url_only" == "true" ]]; then
         if [[ "$target" == "zellij" ]]; then
             echo "$(zellij_web_effective_url)"
+        elif [[ "$target" == "files" ]]; then
+            echo "$(files_effective_url)"
         else
             echo "$(opencode_web_effective_url)"
         fi
@@ -321,7 +411,7 @@ show_web_status() {
 
     if [[ "$action" != "status" ]]; then
         if [[ -z "$target" ]]; then
-            echo -e "${RED}Error:${NC} Specify a service (opencode|zellij) for action '${action}'"
+            echo -e "${RED}Error:${NC} Specify a service (opencode|zellij|files) for action '${action}'"
             show_web_usage
             return 1
         fi
@@ -336,9 +426,13 @@ show_web_status() {
         zellij)
             print_zellij_web_status
             ;;
+        files)
+            print_files_status
+            ;;
         "")
             print_opencode_web_status
             print_zellij_web_status
+            print_files_status
             ;;
         *)
             echo -e "${RED}Error:${NC} Unknown web service '${target}'"
@@ -581,4 +675,182 @@ show_doctor() {
     fi
 
     echo ""
+}
+
+share_files() {
+    local share_dir="$HOME/vaibhav-share"
+
+    if [[ $# -eq 0 ]]; then
+        if [[ ! -d "$share_dir" ]]; then
+            echo -e "${YELLOW}Share directory not set up.${NC}"
+            echo -e "${DIM}Run ./setup-desktop.sh to configure the file sharing service.${NC}"
+            return 1
+        fi
+
+        local url
+        url=$(files_effective_url 2>/dev/null || echo "http://127.0.0.1:9090")
+
+        echo -e "${BOLD}Vaibhav Files${NC}  ${CYAN}${url}${NC}"
+        echo ""
+
+        if [[ -z "$(ls -A "$share_dir" 2>/dev/null)" ]]; then
+            echo -e "  ${DIM}(empty)${NC}"
+        else
+            find "$share_dir" -type f -printf '  %P\n' 2>/dev/null | sort
+        fi
+
+        echo ""
+        echo -e "${DIM}Usage: vaibhav share <file> [subdir]${NC}"
+        return 0
+    fi
+
+    local src="$1"
+    local subdir="${2:-}"
+
+    if [[ ! -e "$src" ]]; then
+        echo -e "${RED}Error:${NC} File not found: $src"
+        return 1
+    fi
+
+    mkdir -p "$share_dir"
+    local dest_dir="$share_dir"
+    if [[ -n "$subdir" ]]; then
+        dest_dir="$share_dir/$subdir"
+        mkdir -p "$dest_dir"
+    fi
+
+    cp -v "$src" "$dest_dir/"
+
+    local filename
+    filename=$(basename "$src")
+    local url
+    url=$(files_effective_url 2>/dev/null || echo "http://127.0.0.1:9090")
+    local rel_path="${subdir:+$subdir/}$filename"
+
+    echo -e "${GREEN}✓${NC} Shared: ${CYAN}${url}/${rel_path}${NC}"
+}
+
+api_status() {
+    local projects_file="${PROJECTS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav/projects}"
+    local zellij_bin="${VAIBHAV_ZELLIJ_BIN:-$(command -v zellij 2>/dev/null || true)}"
+
+    # Get active zellij sessions
+    local active_sessions=""
+    if [[ -n "$zellij_bin" ]]; then
+        active_sessions=$("$zellij_bin" list-sessions --no-formatting 2>/dev/null | awk '
+            /^[[:space:]]*$/ { next }
+            /No active sessions/ { next }
+            /\(EXITED/ { next }
+            { print $1 }
+        ' || true)
+    fi
+
+    # Build JSON
+    printf '{"projects":['
+    local first=true
+    if [[ -f "$projects_file" ]]; then
+        while IFS='=' read -r name path; do
+            [[ -z "$name" || "$name" == \#* ]] && continue
+            local active=false
+            if [[ -n "$active_sessions" ]] && echo "$active_sessions" | grep -qx "$name" 2>/dev/null; then
+                active=true
+            fi
+            if [[ "$first" == "true" ]]; then
+                first=false
+            else
+                printf ','
+            fi
+            printf '{"name":"%s","path":"%s","active":%s}' "$name" "$path" "$active"
+        done < "$projects_file"
+    fi
+    printf '],"sessions":['
+
+    # List all active zellij sessions (including non-project ones)
+    first=true
+    if [[ -n "$active_sessions" ]]; then
+        while IFS= read -r sess; do
+            [[ -z "$sess" ]] && continue
+            if [[ "$first" == "true" ]]; then
+                first=false
+            else
+                printf ','
+            fi
+            printf '"%s"' "$sess"
+        done <<< "$active_sessions"
+    fi
+    printf ']}\n'
+}
+
+api_kill_session() {
+    local session_name="$1"
+    local zellij_bin="${VAIBHAV_ZELLIJ_BIN:-$(command -v zellij 2>/dev/null || true)}"
+
+    if [[ -z "$session_name" ]]; then
+        printf '{"ok":false,"error":"session name required"}\n'
+        return 1
+    fi
+
+    if [[ -z "$zellij_bin" ]]; then
+        printf '{"ok":false,"error":"zellij not found"}\n'
+        return 1
+    fi
+
+    if "$zellij_bin" kill-session "$session_name" 2>/dev/null; then
+        printf '{"ok":true}\n'
+    else
+        printf '{"ok":false,"error":"failed to kill session %s"}\n' "$session_name"
+        return 1
+    fi
+}
+
+api_open_project() {
+    local project_name="$1"
+    local tool="${2:-}"
+    local zellij_bin="${VAIBHAV_ZELLIJ_BIN:-$(command -v zellij 2>/dev/null || true)}"
+    local projects_file="${PROJECTS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav/projects}"
+
+    if [[ -z "$project_name" ]]; then
+        printf '{"ok":false,"error":"project name required"}\n'
+        return 1
+    fi
+
+    local project_path=""
+    if [[ -f "$projects_file" ]]; then
+        project_path=$(grep "^${project_name}=" "$projects_file" 2>/dev/null | cut -d= -f2-)
+    fi
+
+    if [[ -z "$project_path" ]]; then
+        printf '{"ok":false,"error":"project not found: %s"}\n' "$project_name"
+        return 1
+    fi
+
+    if [[ -z "$zellij_bin" ]]; then
+        printf '{"ok":false,"error":"zellij not found"}\n'
+        return 1
+    fi
+
+    # Create or attach session in background
+    if ! "$zellij_bin" list-sessions --no-formatting 2>/dev/null | grep -q "^${project_name} "; then
+        # Session doesn't exist — create it
+        cd "$project_path" || { printf '{"ok":false,"error":"cannot cd to %s"}\n' "$project_path"; return 1; }
+        "$zellij_bin" --session "$project_name" options --default-cwd "$project_path" &
+        disown
+        sleep 1
+    fi
+
+    # If tool specified, open it in a new tab
+    if [[ -n "$tool" ]]; then
+        local tool_cmd=""
+        case "$tool" in
+            amp) tool_cmd="amp" ;;
+            claude) tool_cmd="claude" ;;
+            codex) tool_cmd="codex" ;;
+            opencode) tool_cmd="opencode" ;;
+            pi) tool_cmd="pi" ;;
+            *) tool_cmd="$tool" ;;
+        esac
+        "$zellij_bin" --session "$project_name" action new-tab --name "$tool" --cwd "$project_path" -- "$tool_cmd" 2>/dev/null || true
+    fi
+
+    printf '{"ok":true,"session":"%s"}\n' "$project_name"
 }
