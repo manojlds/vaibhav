@@ -829,14 +829,11 @@ api_open_project() {
         return 1
     fi
 
-    # Create session in background if it doesn't exist (headless, no TTY needed)
-    if ! "$zellij_bin" list-sessions --no-formatting 2>/dev/null | grep -q "^${project_name} "; then
-        cd "$project_path" || { printf '{"ok":false,"error":"cannot cd to %s"}\n' "$project_path"; return 1; }
-        "$zellij_bin" attach --create-background "$project_name" >/dev/null 2>&1 || true
-        sleep 1
-    fi
+    # Don't create the session here — zellij web creates/attaches sessions
+    # automatically when the browser navigates to the session URL.
+    # Sessions created via CLI are not "shared" to web clients.
 
-    # If tool specified, open it in a new tab
+    # If tool specified, wait for the web client to create the session, then add tool tab
     if [[ -n "$tool" ]]; then
         local tool_cmd=""
         case "$tool" in
@@ -847,6 +844,16 @@ api_open_project() {
             pi) tool_cmd="pi" ;;
             *) tool_cmd="$tool" ;;
         esac
+        # Wait for the session to appear (created by web client navigation)
+        local retries=0
+        while ! "$zellij_bin" list-sessions --no-formatting 2>/dev/null | grep -q "^${project_name} "; do
+            retries=$((retries + 1))
+            if [[ $retries -ge 10 ]]; then
+                printf '{"ok":true,"session":"%s","tool_pending":true}\n' "$project_name"
+                return 0
+            fi
+            sleep 0.5
+        done
         "$zellij_bin" --session "$project_name" action new-tab --name "$tool" --cwd "$project_path" -- "$tool_cmd" 2>/dev/null || true
     fi
 
