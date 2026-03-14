@@ -261,12 +261,15 @@ fun VaibhavSwitcher(
                                 val proj = projectName
                                 val tool = toolId
                                 toolPickerProject = null
-                                isActioning = true
-                                scope.launch {
-                                    VaibhavApi.openProject(config.filesBaseUrl, proj, tool)
-                                    isActioning = false
-                                    // Navigate to the session after opening
-                                    onSessionSelect(proj)
+                                // Navigate first — zellij web creates the session via URL
+                                onSessionSelect(proj)
+                                // Then add tool tab via API (if a tool was selected)
+                                if (tool.isNotBlank()) {
+                                    scope.launch {
+                                        // Give zellij web a moment to create the session
+                                        kotlinx.coroutines.delay(1500)
+                                        VaibhavApi.openProject(config.filesBaseUrl, proj, tool)
+                                    }
                                 }
                             },
                             modifier = Modifier.fillMaxWidth()
