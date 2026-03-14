@@ -167,6 +167,23 @@ case "${1:-}" in
             update_desktop
         fi
         ;;
+    api)
+        case "${2:-}" in
+            kill)
+                api_kill_session "${3:-}"
+                ;;
+            open)
+                api_open_project "${3:-}" "${4:-}"
+                ;;
+            *)
+                api_status
+                ;;
+        esac
+        ;;
+    share)
+        shift
+        share_files "$@"
+        ;;
     ralph)
         shift
         SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
