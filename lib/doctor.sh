@@ -829,12 +829,10 @@ api_open_project() {
         return 1
     fi
 
-    # Create or attach session in background
+    # Create session in background if it doesn't exist (headless, no TTY needed)
     if ! "$zellij_bin" list-sessions --no-formatting 2>/dev/null | grep -q "^${project_name} "; then
-        # Session doesn't exist — create it
         cd "$project_path" || { printf '{"ok":false,"error":"cannot cd to %s"}\n' "$project_path"; return 1; }
-        "$zellij_bin" --session "$project_name" options --default-cwd "$project_path" &
-        disown
+        "$zellij_bin" attach --create-background "$project_name" >/dev/null 2>&1 || true
         sleep 1
     fi
 
