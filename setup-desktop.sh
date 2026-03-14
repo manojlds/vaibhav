@@ -370,6 +370,78 @@ UNIT
     fi
 fi
 
+# --- Vaibhav Files (file sharing) ---
+step "Vaibhav Files (file sharing server)"
+SHARE_DIR="$HOME/vaibhav-share"
+FILES_SERVICE_FILE="$HOME/.config/systemd/user/vaibhav-files.service"
+
+if systemctl --user is-active --quiet vaibhav-files 2>/dev/null; then
+    ok "vaibhav-files service already running"
+    echo -e "  ${DIM}Sharing: ${SHARE_DIR}${NC}"
+else
+    read -rp "  Set up a file sharing server (APKs, HTML, etc.)? [y/N] " yn </dev/tty
+    if [[ "$yn" =~ ^[Yy]$ ]]; then
+        FILES_PORT=9090
+        FILES_HTTPS_PORT=9443
+        read -rp "  Local port [${FILES_PORT}]: " input_files_port </dev/tty
+        FILES_PORT="${input_files_port:-$FILES_PORT}"
+        read -rp "  Tailscale HTTPS port [${FILES_HTTPS_PORT}]: " input_files_https_port </dev/tty
+        FILES_HTTPS_PORT="${input_files_https_port:-$FILES_HTTPS_PORT}"
+
+        # Create share directory with common subdirs
+        mkdir -p "$SHARE_DIR"/{apk,html,output}
+        ok "Created ${SHARE_DIR}/ (apk/ html/ output/)"
+
+        # Create systemd unit — Python http.server on localhost
+        mkdir -p ~/.config/systemd/user
+        cat > "$FILES_SERVICE_FILE" << UNIT
+[Unit]
+Description=Vaibhav File Sharing Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${SHARE_DIR}
+ExecStart=/usr/bin/python3 -m http.server ${FILES_PORT} --bind 127.0.0.1
+ExecStartPost=-/bin/sh -c '/usr/bin/tailscale serve --bg --yes --https ${FILES_HTTPS_PORT} http://127.0.0.1:${FILES_PORT} &'
+ExecStopPost=-/usr/bin/tailscale serve --https ${FILES_HTTPS_PORT} off
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT
+        ok "Created ${FILES_SERVICE_FILE}"
+
+        loginctl enable-linger "$USER" 2>/dev/null || true
+
+        systemctl --user daemon-reload
+        systemctl --user enable vaibhav-files
+        systemctl --user start vaibhav-files
+        ok "vaibhav-files service started"
+
+        sleep 1
+        if curl -sf "http://127.0.0.1:${FILES_PORT}/" >/dev/null 2>&1; then
+            ok "File server healthy on 127.0.0.1:${FILES_PORT}"
+        else
+            warn "Health check failed — check: journalctl --user -u vaibhav-files -f"
+        fi
+
+        if command -v tailscale &>/dev/null; then
+            TS_HOSTNAME=$(tailscale status --json 2>/dev/null | grep -m1 '"DNSName"' | grep -o '"DNSName": *"[^"]*"' | cut -d'"' -f4 | sed 's/\.$//')
+            if [[ -n "$TS_HOSTNAME" ]]; then
+                if [[ "$FILES_HTTPS_PORT" == "443" ]]; then
+                    echo -e "  ${GREEN}URL:${NC} ${BOLD}https://${TS_HOSTNAME}${NC}"
+                else
+                    echo -e "  ${GREEN}URL:${NC} ${BOLD}https://${TS_HOSTNAME}:${FILES_HTTPS_PORT}${NC}"
+                fi
+            fi
+        fi
+    else
+        skip "vaibhav-files service"
+    fi
+fi
+
 # --- vaibhav script ---
 step "Installing vaibhav command"
 mkdir -p ~/bin
@@ -458,12 +530,18 @@ if systemctl --user is-active --quiet zellij-web 2>/dev/null; then
         echo -e "Zellij Web:       ${CYAN}${ZELLIJ_WEB_URL}${NC}"
     fi
 fi
+if systemctl --user is-active --quiet vaibhav-files 2>/dev/null; then
+    FILES_URL=$(vaibhav web --files-url-only 2>/dev/null || true)
+    if [[ -n "$FILES_URL" ]]; then
+        echo -e "Vaibhav Files:    ${CYAN}${FILES_URL}${NC}"
+    fi
+fi
 
 echo ""
 echo -e "${BOLD}Next steps:${NC}"
 echo "  1. Run the Termux setup on your Android phone"
 echo "  2. Use 'vaibhav list' to see your projects"
 echo "  3. Use 'vaibhav <name> <tool>' to start coding"
-echo "  4. Use 'vaibhav web' to see/manage OpenCode + Zellij Web"
+echo "  4. Use 'vaibhav web' to see/manage OpenCode + Zellij Web + Files"
 echo ""
 echo -e "${DIM}Example: vaibhav vaibhav pi (or amp/claude/codex/opencode)${NC}"
