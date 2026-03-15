@@ -175,6 +175,12 @@ case "${1:-}" in
             open)
                 api_open_project "${3:-}" "${4:-}"
                 ;;
+            active-tab)
+                api_active_tab "${3:-}"
+                ;;
+            focus-tab)
+                api_focus_tab "${3:-}" "${4:-}"
+                ;;
             *)
                 api_status
                 ;;

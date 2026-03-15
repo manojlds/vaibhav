@@ -22,11 +22,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.vaibhav.app.data.VaibhavApi
+import kotlinx.coroutines.launch
 import com.vaibhav.app.model.ConnectionConfig
 import com.vaibhav.app.model.ModifierState
 import com.vaibhav.app.ui.ModifierProvider
@@ -65,6 +70,20 @@ fun TerminalScreen(
     var lastConnectionToastAt by remember { mutableLongStateOf(0L) }
     var lastBackPressAt by remember { mutableLongStateOf(0L) }
     val appContext = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
+    val lastKnownTabBySession = remember { mutableStateMapOf<String, String>() }
+    var restoreRequest by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var appInForeground by remember { mutableStateOf(true) }
+    var restoreInFlight by remember { mutableStateOf(false) }
+
+    fun rememberActiveTab(sessionName: String, tabName: String?) {
+        val normalizedSession = sessionName.trim().trim('/')
+        val normalizedTab = tabName?.trim().orEmpty()
+        if (normalizedSession.isNotBlank() && normalizedTab.isNotBlank()) {
+            lastKnownTabBySession[normalizedSession] = normalizedTab
+        }
+    }
 
     fun showConnectionToast(message: String) {
         val now = SystemClock.uptimeMillis()
@@ -78,6 +97,84 @@ fun TerminalScreen(
     }
 
     fun normalizeUrl(url: String): String = url.trim().trimEnd('/')
+
+    DisposableEffect(lifecycleOwner, config.filesBaseUrl, currentSessionPath, activeUrl) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> {
+                    appInForeground = false
+
+                    val sessionAtPause = currentSessionPath.trim().trim('/')
+                    if (sessionAtPause.isBlank() || activeUrl == "about:blank") return@LifecycleEventObserver
+
+                    lastKnownTabBySession[sessionAtPause]?.let { knownTab ->
+                        if (knownTab.isNotBlank()) {
+                            restoreRequest = sessionAtPause to knownTab
+                        }
+                    }
+
+                    scope.launch {
+                        val response = VaibhavApi.getActiveTab(config.filesBaseUrl, sessionAtPause)
+                        val activeTab = response.activeTab?.trim().orEmpty()
+                        if (response.ok && activeTab.isNotBlank()) {
+                            rememberActiveTab(sessionAtPause, activeTab)
+                            restoreRequest = sessionAtPause to activeTab
+                        }
+                    }
+                }
+
+                Lifecycle.Event.ON_RESUME -> {
+                    appInForeground = true
+                }
+
+                else -> Unit
+            }
+        }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    LaunchedEffect(appInForeground, restoreRequest, currentSessionPath, activeUrl, config.filesBaseUrl) {
+        if (!appInForeground || restoreInFlight) return@LaunchedEffect
+        val req = restoreRequest ?: return@LaunchedEffect
+
+        val activeSession = currentSessionPath.trim().trim('/')
+        if (activeSession.isBlank() || activeUrl == "about:blank") return@LaunchedEffect
+
+        val reqSession = req.first.trim().trim('/')
+        val reqTab = req.second.trim()
+        if (reqSession.isBlank() || reqTab.isBlank()) {
+            restoreRequest = null
+            return@LaunchedEffect
+        }
+        if (reqSession != activeSession) {
+            return@LaunchedEffect
+        }
+
+        restoreInFlight = true
+        try {
+            kotlinx.coroutines.delay(900)
+
+            var response = VaibhavApi.focusTab(config.filesBaseUrl, reqSession, reqTab)
+            var attempts = 0
+            val maxAttempts = 6
+            while (attempts < maxAttempts && response.ok && response.pending) {
+                attempts += 1
+                kotlinx.coroutines.delay(700)
+                response = VaibhavApi.focusTab(config.filesBaseUrl, reqSession, reqTab)
+            }
+
+            if (response.ok && response.focused) {
+                rememberActiveTab(reqSession, reqTab)
+            }
+        } finally {
+            restoreInFlight = false
+            restoreRequest = null
+        }
+    }
 
     LaunchedEffect(config.host, config.port, initialSession) {
         if (initialSession.isBlank()) {
@@ -197,6 +294,17 @@ fun TerminalScreen(
                                     if (retryInProgress) {
                                         Toast.makeText(appContext, "Reconnected", Toast.LENGTH_SHORT).show()
                                         retryInProgress = false
+                                    }
+
+                                    val sessionName = currentSessionPath.trim().trim('/')
+                                    if (sessionName.isNotBlank() && activeUrl != "about:blank") {
+                                        scope.launch {
+                                            val response = VaibhavApi.getActiveTab(config.filesBaseUrl, sessionName)
+                                            val activeTab = response.activeTab?.trim().orEmpty()
+                                            if (response.ok && activeTab.isNotBlank()) {
+                                                rememberActiveTab(sessionName, activeTab)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -402,6 +510,7 @@ fun TerminalScreen(
                 errorUrl = ""
                 isLoading = true
                 retryInProgress = false
+                restoreRequest = null
                 webViewRef?.visibility = View.VISIBLE
                 webViewRef?.loadUrl(url)
             },
