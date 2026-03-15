@@ -40,6 +40,7 @@ fun ExtraKeysBar(
     onAltToggle: () -> Unit,
     onArrowToggle: () -> Unit,
     onArrowSwipe: (keyCode: Int) -> Unit,
+    onKeyboardRequest: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val barColor = Color(0xFF1E1E2E)
@@ -115,6 +116,10 @@ fun ExtraKeysBar(
                 onKeyPress(KeyEvent.KEYCODE_TAB)
             }
 
+            KeyButton("⌫", keyColor, textColor, Modifier.weight(1f)) {
+                onKeyPress(KeyEvent.KEYCODE_DEL)
+            }
+
             // Arrow keys toggle / swipe button
             ArrowButton(
                 showArrows = showArrows,
@@ -125,6 +130,10 @@ fun ExtraKeysBar(
                 onToggle = onArrowToggle,
                 onSwipe = onArrowSwipe
             )
+
+            KeyButton("KBD", keyColor, textColor, Modifier.weight(1f)) {
+                onKeyboardRequest()
+            }
         }
 
         // Symbols row (Termux-style)

@@ -5,11 +5,12 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 import android.webkit.WebView
-import com.vaibhav.app.model.ModifierState
 
 interface ModifierProvider {
     fun getMetaState(): Int
@@ -33,29 +34,68 @@ class TerminalWebView @JvmOverloads constructor(
     private val minSwipeDistance = 150f
     private val edgeSwipeMargin = 50f
 
+    init {
+        isFocusable = true
+        isFocusableInTouchMode = true
+    }
+
+    override fun onCheckIsTextEditor(): Boolean = true
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_UP) {
+            post { focusTerminalInput() }
+        }
+        return super.onTouchEvent(event)
+    }
+
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
         val baseConnection = super.onCreateInputConnection(outAttrs)
         outAttrs.imeOptions = outAttrs.imeOptions or
                 EditorInfo.IME_FLAG_NO_EXTRACT_UI or
                 EditorInfo.IME_FLAG_NO_FULLSCREEN
         outAttrs.inputType = EditorInfo.TYPE_CLASS_TEXT or
-                EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
+                EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
 
         return object : BaseInputConnection(this, false) {
             override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                focusTerminalInput()
+
                 val provider = modifierProvider
                 if (provider != null && provider.getMetaState() != 0 && text?.length == 1) {
                     val char = text[0]
                     val keyCode = getKeyCodeForChar(char)
                     if (keyCode != 0) {
                         val metaState = provider.getMetaState()
-                        val now = SystemClock.uptimeMillis()
-                        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0, metaState))
-                        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0, metaState))
+                        dispatchTerminalKey(keyCode, metaState)
                         provider.onModifierUsed()
                         return true
                     }
                 }
+
+                if (text != null && text.any { it == '\n' || it == '\r' || it == '\b' || it.code == 127 }) {
+                    text.forEach { ch ->
+                        when {
+                            ch == '\n' || ch == '\r' -> {
+                                val meta = provider?.getMetaState() ?: 0
+                                dispatchTerminalKey(KeyEvent.KEYCODE_ENTER, meta)
+                            }
+                            ch == '\b' || ch.code == 127 -> {
+                                val meta = provider?.getMetaState() ?: 0
+                                dispatchTerminalKey(KeyEvent.KEYCODE_DEL, meta)
+                            }
+                            else -> {
+                                val handled = baseConnection?.commitText(ch.toString(), 1)
+                                    ?: super.commitText(ch.toString(), 1)
+                                if (!handled) {
+                                    return false
+                                }
+                            }
+                        }
+                    }
+                    return true
+                }
+
                 return baseConnection?.commitText(text, newCursorPosition)
                     ?: super.commitText(text, newCursorPosition)
             }
@@ -76,17 +116,34 @@ class TerminalWebView @JvmOverloads constructor(
                 return baseConnection?.sendKeyEvent(event) ?: super.sendKeyEvent(event)
             }
 
+            override fun performEditorAction(actionCode: Int): Boolean {
+                val meta = modifierProvider?.getMetaState() ?: 0
+                dispatchTerminalKey(KeyEvent.KEYCODE_ENTER, meta)
+                return true
+            }
+
             override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
                 // Convert backspace to key event for xterm.js compatibility
-                if (beforeLength == 1 && afterLength == 0) {
-                    val now = SystemClock.uptimeMillis()
+                if (beforeLength > 0 && afterLength == 0) {
                     val meta = modifierProvider?.getMetaState() ?: 0
-                    sendKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL, 0, meta))
-                    sendKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL, 0, meta))
+                    repeat(beforeLength.coerceAtMost(8)) {
+                        dispatchTerminalKey(KeyEvent.KEYCODE_DEL, meta)
+                    }
                     return true
                 }
                 return baseConnection?.deleteSurroundingText(beforeLength, afterLength)
                     ?: super.deleteSurroundingText(beforeLength, afterLength)
+            }
+
+            override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+                if (beforeLength > 0 && afterLength == 0) {
+                    val meta = modifierProvider?.getMetaState() ?: 0
+                    repeat(beforeLength.coerceAtMost(8)) {
+                        dispatchTerminalKey(KeyEvent.KEYCODE_DEL, meta)
+                    }
+                    return true
+                }
+                return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
             }
         }
     }
@@ -108,13 +165,19 @@ class TerminalWebView @JvmOverloads constructor(
     }
 
     fun dispatchKeyWithModifiers(keyCode: Int, modifiers: Int = 0) {
-        val now = SystemClock.uptimeMillis()
+        focusTerminalInput()
         val meta = modifiers or (modifierProvider?.getMetaState() ?: 0)
+        dispatchTerminalKey(keyCode, meta)
+    }
+
+    private fun dispatchTerminalKey(keyCode: Int, meta: Int = 0) {
+        val now = SystemClock.uptimeMillis()
         dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0, meta))
         dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0, meta))
     }
 
     fun sendKeyViaJavascript(key: String, ctrlActive: Boolean, altActive: Boolean, metaActive: Boolean) {
+        focusTerminalInput()
         val js = """
             (function() {
                 let target = document.querySelector('.xterm-helper-textarea') || document.activeElement || document.body;
@@ -132,7 +195,42 @@ class TerminalWebView @JvmOverloads constructor(
         evaluateJavascript(js, null)
     }
 
+    fun showKeyboard() {
+        requestFocus()
+        requestFocusFromTouch()
+        post {
+            focusTerminalInput()
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+            postDelayed({ imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT) }, 120)
+            postDelayed({ imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT) }, 240)
+        }
+    }
+
+    fun focusTerminalInput() {
+        val focusJs = """
+            (function() {
+                const textarea = document.querySelector('.xterm-helper-textarea');
+                if (textarea) {
+                    textarea.setAttribute('autocorrect', 'off');
+                    textarea.setAttribute('autocapitalize', 'off');
+                    textarea.setAttribute('spellcheck', 'false');
+                    textarea.setAttribute('autocomplete', 'off');
+                    textarea.focus();
+                    return;
+                }
+                if (document && document.body) {
+                    document.body.focus();
+                }
+            })();
+        """.trimIndent()
+        evaluateJavascript(focusJs, null)
+    }
+
     private fun getKeyCodeForChar(char: Char): Int {
+        if (char == '\b' || char.code == 127) return KeyEvent.KEYCODE_DEL
+        if (char == '\n' || char == '\r') return KeyEvent.KEYCODE_ENTER
+
         return when (char.lowercaseChar()) {
             'a' -> KeyEvent.KEYCODE_A; 'b' -> KeyEvent.KEYCODE_B
             'c' -> KeyEvent.KEYCODE_C; 'd' -> KeyEvent.KEYCODE_D

@@ -7,9 +7,12 @@ data class ConnectionConfig(
     val filesPort: Int = 9443,
     val zellijSessionName: String = ""
 ) {
+    val normalizedSessionName: String
+        get() = zellijSessionName.trim().trim('/')
+
     val zellijWebUrl: String
         get() {
-            val sessionPath = if (zellijSessionName.isNotBlank()) "/$zellijSessionName" else ""
+            val sessionPath = if (normalizedSessionName.isNotBlank()) "/$normalizedSessionName" else ""
             return "https://$host:$port$sessionPath"
         }
 
@@ -18,6 +21,7 @@ data class ConnectionConfig(
 
     fun withDefaults() = copy(
         port = if (port == 0) 8443 else port,
-        filesPort = if (filesPort == 0) 9443 else filesPort
+        filesPort = if (filesPort == 0) 9443 else filesPort,
+        zellijSessionName = normalizedSessionName
     )
 }

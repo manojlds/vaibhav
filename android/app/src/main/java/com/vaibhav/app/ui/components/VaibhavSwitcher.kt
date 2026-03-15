@@ -1,6 +1,6 @@
 package com.vaibhav.app.ui.components
 
-import androidx.compose.animation.animateColorAsState
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -29,7 +30,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.vaibhav.app.data.VaibhavApi
-import com.vaibhav.app.data.VaibhavProject
 import com.vaibhav.app.data.VaibhavStatus
 import com.vaibhav.app.model.ConnectionConfig
 import kotlinx.coroutines.launch
@@ -49,8 +49,10 @@ fun VaibhavSwitcher(
     var killConfirm by remember { mutableStateOf<String?>(null) }
     var toolPickerProject by remember { mutableStateOf<String?>(null) }
     var isActioning by remember { mutableStateOf(false) }
+    var actionStatus by remember { mutableStateOf("Setting up session...") }
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
+    val context = LocalContext.current
 
     fun refresh() {
         isLoading = true
@@ -98,7 +100,8 @@ fun VaibhavSwitcher(
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.fillMaxSize()) {
                 // Header
                 Row(
                     modifier = Modifier.fillMaxWidth()
@@ -181,7 +184,65 @@ fun VaibhavSwitcher(
                                     item = item, isCurrent = isCurrent,
                                     onClick = {
                                         if (item.isActive) {
-                                            onSessionSelect(item.name)
+                                            if (item.isProject) {
+                                                val proj = item.name
+                                                isActioning = true
+                                                scope.launch {
+                                                    try {
+                                                        actionStatus = "Opening session..."
+                                                        onSessionSelect(proj)
+                                                        kotlinx.coroutines.delay(900)
+
+                                                        actionStatus = "Applying project folder..."
+                                                        var result = VaibhavApi.openProject(config.filesBaseUrl, proj, "")
+                                                        var attempts = 0
+                                                        val maxAttempts = 4
+                                                        while (attempts < maxAttempts && result.ok && result.shellPending) {
+                                                            attempts += 1
+                                                            actionStatus = "Applying project folder... ($attempts/$maxAttempts)"
+                                                            kotlinx.coroutines.delay(900)
+                                                            result = VaibhavApi.openProject(config.filesBaseUrl, proj, "")
+                                                        }
+
+                                                        when {
+                                                            !result.ok -> {
+                                                                val msg = result.error ?: "unknown error"
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    "Couldn't prepare shell in $proj: $msg",
+                                                                    Toast.LENGTH_LONG
+                                                                ).show()
+                                                            }
+                                                            result.shellPending -> {
+                                                                val msg = if (result.cwdApplied) {
+                                                                    "$proj opened (cwd applied in current tab)"
+                                                                } else {
+                                                                    "$proj opened. If still in ~, tap project once more."
+                                                                }
+                                                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                                            }
+                                                            result.cwdApplied -> {
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    "$proj opened (cwd set)",
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            }
+                                                            else -> {
+                                                                Toast.makeText(context, "$proj opened", Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        }
+
+                                                        onDismiss()
+                                                    } finally {
+                                                        isActioning = false
+                                                        actionStatus = "Setting up session..."
+                                                    }
+                                                }
+                                            } else {
+                                                onSessionSelect(item.name)
+                                                onDismiss()
+                                            }
                                         } else {
                                             toolPickerProject = item.name
                                         }
@@ -195,14 +256,34 @@ fun VaibhavSwitcher(
                     }
                 }
 
-                // Loading overlay for actions
+                }
+
                 if (isActioning) {
-                    Box(Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Starting...", fontFamily = FontFamily.Monospace, fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.35f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    actionStatus,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
@@ -222,7 +303,13 @@ fun VaibhavSwitcher(
                         val name = sessionName
                         killConfirm = null
                         scope.launch {
-                            VaibhavApi.killSession(config.filesBaseUrl, name)
+                            val result = VaibhavApi.killSession(config.filesBaseUrl, name)
+                            if (result.ok) {
+                                Toast.makeText(context, "Killed session $name", Toast.LENGTH_SHORT).show()
+                            } else {
+                                val msg = result.error ?: "unknown error"
+                                Toast.makeText(context, "Failed to kill $name: $msg", Toast.LENGTH_LONG).show()
+                            }
                             refresh()
                         }
                     },
@@ -260,15 +347,127 @@ fun VaibhavSwitcher(
                             onClick = {
                                 val proj = projectName
                                 val tool = toolId
+                                val label = toolLabel
                                 toolPickerProject = null
-                                // Navigate first — zellij web creates the session via URL
-                                onSessionSelect(proj)
-                                // Then add tool tab via API (if a tool was selected)
-                                if (tool.isNotBlank()) {
-                                    scope.launch {
-                                        // Give zellij web a moment to create the session
-                                        kotlinx.coroutines.delay(1500)
-                                        VaibhavApi.openProject(config.filesBaseUrl, proj, tool)
+
+                                isActioning = true
+                                scope.launch {
+                                    try {
+                                        actionStatus = "Opening session..."
+                                        // Navigate first so zellij web can create/attach the session client.
+                                        onSessionSelect(proj)
+                                        kotlinx.coroutines.delay(1200)
+
+                                        actionStatus = if (tool.isBlank()) {
+                                            "Applying project folder..."
+                                        } else {
+                                            "Preparing $label tab..."
+                                        }
+
+                                        var result = VaibhavApi.openProject(config.filesBaseUrl, proj, tool)
+                                        var attempts = 0
+                                        val maxAttempts = if (tool.isBlank()) 4 else 6
+                                        var tabWasFreshlyCreated = result.toolTabCreated
+                                        while (attempts < maxAttempts && result.ok) {
+                                            val done = if (tool.isBlank()) {
+                                                !result.shellPending
+                                            } else {
+                                                result.toolLaunchSent || (result.alreadyRunning && !tabWasFreshlyCreated)
+                                            }
+                                            val pending = if (tool.isBlank()) {
+                                                result.shellPending
+                                            } else {
+                                                result.toolPending ||
+                                                        result.toolLaunchPending ||
+                                                        result.toolTabCreated ||
+                                                        (result.alreadyRunning && tabWasFreshlyCreated)
+                                            }
+                                            if (done || !pending) break
+
+                                            attempts += 1
+                                            actionStatus = if (tool.isBlank()) {
+                                                "Applying project folder... ($attempts/$maxAttempts)"
+                                            } else {
+                                                "Starting $label... ($attempts/$maxAttempts)"
+                                            }
+                                            kotlinx.coroutines.delay(1200)
+                                            result = VaibhavApi.openProject(config.filesBaseUrl, proj, tool)
+                                            tabWasFreshlyCreated = tabWasFreshlyCreated || result.toolTabCreated
+                                        }
+
+                                        when {
+                                            !result.ok -> {
+                                                val msg = result.error ?: "unknown error"
+                                                val action = if (tool.isBlank()) "open shell" else "prepare $label"
+                                                Toast.makeText(
+                                                    context,
+                                                    "Couldn't $action in $proj: $msg",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                            result.alreadyRunning && !tabWasFreshlyCreated -> {
+                                                val msg = if (result.cwdApplied) {
+                                                    "$label tab already exists in $proj (cwd applied in current tab)"
+                                                } else {
+                                                    "$label tab already exists in $proj"
+                                                }
+                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                            }
+                                            tool.isBlank() && result.shellTabCreated -> {
+                                                val msg = if (result.cwdApplied) {
+                                                    "Shell tab prepared in $proj (cwd set)"
+                                                } else {
+                                                    "Shell tab prepared in $proj"
+                                                }
+                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                            }
+                                            tool.isBlank() && result.shellPending -> {
+                                                val msg = if (result.cwdApplied) {
+                                                    "Session starting. Cwd was applied in current tab."
+                                                } else {
+                                                    "Session is still starting. If you land in ~, select this project once more."
+                                                }
+                                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                            }
+                                            result.toolLaunchSent -> {
+                                                Toast.makeText(
+                                                    context,
+                                                    "$label started in $proj",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                            result.toolLaunchPending || (result.alreadyRunning && tabWasFreshlyCreated) -> {
+                                                Toast.makeText(
+                                                    context,
+                                                    "$label tab is ready in $proj. If it didn't start, run '$tool' once in that tab.",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                            result.toolTabCreated -> {
+                                                val msg = if (result.cwdApplied) {
+                                                    "$label tab prepared in $proj (cwd set)"
+                                                } else {
+                                                    "$label tab prepared in $proj"
+                                                }
+                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                            }
+                                            result.toolPending -> {
+                                                val msg = if (result.cwdApplied) {
+                                                    "$label tab queued, but cwd is already set in current tab."
+                                                } else {
+                                                    "$label tab is queued while session starts. Try once more if needed."
+                                                }
+                                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                            }
+                                            else -> {
+                                                Toast.makeText(context, "Opened $proj", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+
+                                        onDismiss()
+                                    } finally {
+                                        isActioning = false
+                                        actionStatus = "Setting up session..."
                                     }
                                 }
                             },
