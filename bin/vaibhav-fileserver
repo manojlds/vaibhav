@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Vaibhav file server — serves ~/vaibhav-share/ with API endpoints."""
 
+import email.parser
 import http.server
+import io
 import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -26,16 +29,103 @@ def run_vaibhav(*args, timeout=5):
     return result
 
 
+UPLOAD_HTML = '''\
+<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaibhav Upload</title>
+<style>
+  body { font-family: system-ui; background: #1a1a2e; color: #e0e0e0; margin: 0;
+         display: flex; flex-direction: column; align-items: center; padding: 20px; }
+  h1 { color: #00d9ff; font-size: 1.4em; }
+  .drop { border: 2px dashed #444; border-radius: 12px; padding: 40px 20px;
+          text-align: center; width: 90%; max-width: 500px; margin: 16px 0;
+          cursor: pointer; transition: border-color 0.2s; }
+  .drop.over { border-color: #00d9ff; }
+  .drop input { display: none; }
+  button { background: #00d9ff; color: #000; border: none; padding: 12px 32px;
+           border-radius: 8px; font-size: 1em; cursor: pointer; margin-top: 12px; }
+  button:disabled { opacity: 0.4; }
+  .result { margin-top: 16px; word-break: break-all; }
+  .result a { color: #00d9ff; }
+  .path-row { display: flex; align-items: center; gap: 8px; margin-top: 6px;
+              background: #2a2a3e; padding: 8px 12px; border-radius: 6px; }
+  .path-row code { flex: 1; font-size: 0.95em; user-select: all; }
+  .copy-btn { background: #00d9ff; color: #000; border: none; padding: 4px 12px;
+              border-radius: 4px; font-size: 0.85em; cursor: pointer; white-space: nowrap; }
+  .copy-btn.done { background: #4caf50; }
+  .preview { max-width: 300px; max-height: 200px; margin-top: 8px; border-radius: 6px; }
+  .subdir-row { margin: 8px 0; }
+  .subdir-row input { background: #2a2a3e; color: #e0e0e0; border: 1px solid #444;
+                      padding: 8px; border-radius: 6px; width: 200px; }
+</style>
+</head><body>
+<h1>📸 Upload to Vaibhav</h1>
+<div class="subdir-row">
+  <label>Subdir: <input id="subdir" placeholder="e.g. screenshots"></label>
+</div>
+<div class="drop" id="drop">
+  <p>Tap to select or drop files here</p>
+  <input type="file" id="file" multiple accept="image/*,*/*">
+</div>
+<button id="btn" disabled>Upload</button>
+<div id="results"></div>
+<script>
+const drop=document.getElementById('drop'), fi=document.getElementById('file'),
+      btn=document.getElementById('btn'), res=document.getElementById('results');
+drop.onclick=()=>fi.click();
+drop.ondragover=e=>{e.preventDefault();drop.classList.add('over')};
+drop.ondragleave=()=>drop.classList.remove('over');
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');fi.files=e.dataTransfer.files;upd()};
+fi.onchange=upd;
+function upd(){btn.disabled=!fi.files.length;drop.querySelector('p').textContent=
+  fi.files.length?Array.from(fi.files).map(f=>f.name).join(', '):'Tap to select or drop files here';}
+function copyPath(btn,p){navigator.clipboard.writeText(p).then(()=>{btn.textContent='Copied!';btn.classList.add('done');setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('done')},1500)});}
+btn.onclick=async()=>{
+  btn.disabled=true; btn.textContent='Uploading…'; res.innerHTML='';
+  const sub=document.getElementById('subdir').value.trim();
+  for(const f of fi.files){
+    const fd=new FormData(); fd.append('file',f);
+    if(sub) fd.append('subdir',sub);
+    try{
+      const r=await fetch('/upload',{method:'POST',body:fd});
+      const j=await r.json();
+      const d=document.createElement('div'); d.className='result';
+      if(j.ok){
+        d.innerHTML='✅ '+j.filename+'<div class="path-row"><code>'+j.path+'</code><button class="copy-btn" onclick="copyPath(this,\''+j.path.replace(/'/g,"\\'")+'\')">Copy</button></div>';
+        if(f.type.startsWith('image/')){const im=document.createElement('img');im.src=j.url;im.className='preview';d.appendChild(im);}
+      } else d.textContent='❌ '+j.error;
+      res.appendChild(d);
+    }catch(e){res.innerHTML+='<div class="result">❌ '+e+'</div>';}
+  }
+  btn.textContent='Upload'; btn.disabled=false;
+};
+</script></body></html>
+'''
+
+
 class VaibhavHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == '/api/status':
             self._run_api('api')
+        elif parsed.path == '/upload':
+            body = UPLOAD_HTML.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         else:
             super().do_GET()
 
     def do_POST(self):
         parsed = urlparse(self.path)
+
+        if parsed.path == '/upload':
+            self._handle_upload()
+            return
+
         content_length = int(self.headers.get('Content-Length', 0))
         body = {}
         if content_length > 0:
@@ -65,6 +155,73 @@ class VaibhavHandler(http.server.SimpleHTTPRequestHandler):
             self._run_api('api', 'focus-tab', session, tab, timeout=12)
         else:
             self.send_error(404, 'Not found')
+
+    def _handle_upload(self):
+        MAX_SIZE = 50 * 1024 * 1024  # 50 MB
+        content_length = int(self.headers.get('Content-Length', 0))
+        if content_length > MAX_SIZE:
+            self._json_error(413, 'File too large (max 50MB)')
+            return
+
+        content_type = self.headers.get('Content-Type', '')
+        if 'multipart/form-data' not in content_type:
+            self._json_error(400, 'Expected multipart/form-data')
+            return
+
+        raw_body = self.rfile.read(content_length)
+
+        # Parse multipart using email.parser
+        header_bytes = f'Content-Type: {content_type}\r\n\r\n'.encode()
+        msg = email.parser.BytesParser().parsebytes(header_bytes + raw_body)
+
+        file_data = None
+        file_name = None
+        subdir = ''
+
+        for part in msg.walk():
+            disp = part.get('Content-Disposition', '')
+            if 'name="file"' in disp:
+                file_data = part.get_payload(decode=True)
+                # Extract filename from Content-Disposition
+                for token in disp.split(';'):
+                    token = token.strip()
+                    if token.startswith('filename='):
+                        file_name = token.split('=', 1)[1].strip('"')
+            elif 'name="subdir"' in disp:
+                val = part.get_payload(decode=True)
+                if val:
+                    subdir = val.decode().strip().replace('..', '').strip('/')
+
+        if file_data is None or not file_name:
+            self._json_error(400, 'No file provided')
+            return
+
+        # Sanitize filename, prefix with timestamp to avoid collisions
+        original = os.path.basename(file_name)
+        stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        filename = f'{stamp}_{original}'
+
+        share_dir = Path.home() / 'vaibhav-share'
+        dest_dir = share_dir / subdir if subdir else share_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / filename
+
+        with open(dest, 'wb') as f:
+            f.write(file_data)
+
+        rel_path = f'{subdir}/{filename}' if subdir else filename
+        resp = json.dumps({
+            'ok': True,
+            'filename': filename,
+            'path': str(dest),
+            'url': f'/{rel_path}',
+        }).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(resp)))
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(resp)
 
     def _run_api(self, *args, timeout=5):
         try:
