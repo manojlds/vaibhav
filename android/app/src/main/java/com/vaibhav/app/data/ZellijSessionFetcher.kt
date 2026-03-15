@@ -2,6 +2,7 @@ package com.vaibhav.app.data
 
 import android.util.Log
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
@@ -63,7 +64,20 @@ object VaibhavApi {
         }
     }
 
-    data class ApiResponse(val ok: Boolean, val error: String? = null, val session: String? = null)
+    data class ApiResponse(
+        val ok: Boolean,
+        val error: String? = null,
+        val session: String? = null,
+        @SerializedName("tool_pending") val toolPending: Boolean = false,
+        @SerializedName("shell_pending") val shellPending: Boolean = false,
+        @SerializedName("already_running") val alreadyRunning: Boolean = false,
+        @SerializedName("tool_tab_created") val toolTabCreated: Boolean = false,
+        @SerializedName("shell_tab_created") val shellTabCreated: Boolean = false,
+        @SerializedName("cwd_applied") val cwdApplied: Boolean = false,
+        @SerializedName("tool_launch_sent") val toolLaunchSent: Boolean = false,
+        @SerializedName("tool_launch_pending") val toolLaunchPending: Boolean = false,
+        val tool: String? = null
+    )
 
     suspend fun killSession(filesBaseUrl: String, sessionName: String): ApiResponse = withContext(Dispatchers.IO) {
         try {
