@@ -56,6 +56,13 @@ class VaibhavHandler(http.server.SimpleHTTPRequestHandler):
                 self._run_api('api', 'open', project, tool, timeout=25)
             else:
                 self._run_api('api', 'open', project, timeout=25)
+        elif parsed.path == '/api/active-tab':
+            session = body.get('session', '')
+            self._run_api('api', 'active-tab', session, timeout=8)
+        elif parsed.path == '/api/focus-tab':
+            session = body.get('session', '')
+            tab = body.get('tab', '')
+            self._run_api('api', 'focus-tab', session, tab, timeout=12)
         else:
             self.send_error(404, 'Not found')
 

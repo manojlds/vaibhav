@@ -1017,3 +1017,166 @@ api_open_project() {
         printf '{"ok":true,"session":"%s","tool_pending":true,"cwd_applied":%s}\n' "$project_name" "$cwd_applied"
     fi
 }
+
+api_active_tab() {
+    local session_name="$1"
+    local zellij_bin="${VAIBHAV_ZELLIJ_BIN:-$(command -v zellij 2>/dev/null || true)}"
+
+    if [[ -z "$session_name" ]]; then
+        printf '{"ok":false,"error":"session name required"}\n'
+        return 1
+    fi
+
+    if [[ -z "$zellij_bin" ]]; then
+        printf '{"ok":false,"error":"zellij not found"}\n'
+        return 1
+    fi
+
+    local session_active=false
+    if timeout 1 "$zellij_bin" list-sessions --no-formatting 2>/dev/null | awk '
+            /^[[:space:]]*$/ { next }
+            /No active sessions/ { next }
+            /\(EXITED/ { next }
+            { print $1 }
+        ' | grep -Fqx "$session_name" 2>/dev/null; then
+        session_active=true
+    fi
+
+    if [[ "$session_active" != "true" ]]; then
+        printf '{"ok":true,"session":"%s","active_tab":"","pending":true}\n' "$session_name"
+        return 0
+    fi
+
+    local active_tab=""
+    local layout=""
+    layout=$(timeout 2 "$zellij_bin" --session "$session_name" action dump-layout 2>/dev/null || true)
+    if [[ -n "$layout" ]]; then
+        active_tab=$(printf '%s\n' "$layout" | sed -n 's/^[[:space:]]*tab name="\([^"]*\)".*focus=true.*/\1/p' | head -n 1)
+    fi
+
+    if [[ -z "$active_tab" ]]; then
+        local metadata_file=""
+        metadata_file=$(ls -1t "$HOME"/.cache/zellij/*/session_info/"$session_name"/session-metadata.kdl 2>/dev/null | head -n 1 || true)
+
+        if [[ -n "$metadata_file" && -f "$metadata_file" ]]; then
+            active_tab=$(awk '
+                BEGIN { in_tabs=0; in_tab=0; tab_name=""; tab_active="false" }
+                /^[[:space:]]*tabs[[:space:]]*\{/ { in_tabs=1; next }
+                in_tabs && /^[[:space:]]*tab[[:space:]]*\{/ {
+                    in_tab=1
+                    tab_name=""
+                    tab_active="false"
+                    next
+                }
+                in_tabs && in_tab && /^[[:space:]]*name[[:space:]]*"/ {
+                    line=$0
+                    sub(/^[[:space:]]*name[[:space:]]*"/, "", line)
+                    sub(/".*$/, "", line)
+                    tab_name=line
+                    next
+                }
+                in_tabs && in_tab && /^[[:space:]]*active[[:space:]]+/ {
+                    tab_active=$2
+                    next
+                }
+                in_tabs && in_tab && /^[[:space:]]*\}/ {
+                    if (tab_active == "true" && tab_name != "") {
+                        print tab_name
+                        exit
+                    }
+                    in_tab=0
+                    next
+                }
+                in_tabs && !in_tab && /^[[:space:]]*\}/ {
+                    in_tabs=0
+                    next
+                }
+            ' "$metadata_file" | head -n 1)
+        fi
+    fi
+
+    if [[ -n "$active_tab" ]]; then
+        printf '{"ok":true,"session":"%s","active_tab":"%s"}\n' "$session_name" "$active_tab"
+    else
+        printf '{"ok":true,"session":"%s","active_tab":"","pending":true}\n' "$session_name"
+    fi
+}
+
+api_focus_tab() {
+    local session_name="$1"
+    local tab_name="$2"
+    local zellij_bin="${VAIBHAV_ZELLIJ_BIN:-$(command -v zellij 2>/dev/null || true)}"
+
+    if [[ -z "$session_name" ]]; then
+        printf '{"ok":false,"error":"session name required"}\n'
+        return 1
+    fi
+
+    if [[ -z "$tab_name" ]]; then
+        printf '{"ok":false,"error":"tab name required"}\n'
+        return 1
+    fi
+
+    if [[ -z "$zellij_bin" ]]; then
+        printf '{"ok":false,"error":"zellij not found"}\n'
+        return 1
+    fi
+
+    local retries=0
+    local max_retries=12
+    local session_active=false
+    while [[ $retries -lt $max_retries ]]; do
+        if timeout 1 "$zellij_bin" list-sessions --no-formatting 2>/dev/null | awk '
+                /^[[:space:]]*$/ { next }
+                /No active sessions/ { next }
+                /\(EXITED/ { next }
+                { print $1 }
+            ' | grep -Fqx "$session_name" 2>/dev/null; then
+            session_active=true
+            break
+        fi
+        retries=$((retries + 1))
+        sleep 0.3
+    done
+
+    if [[ "$session_active" != "true" ]]; then
+        printf '{"ok":true,"session":"%s","tab":"%s","pending":true}\n' "$session_name" "$tab_name"
+        return 0
+    fi
+
+    local client_wait=0
+    local client_count=0
+    while [[ $client_wait -lt 8 ]]; do
+        client_count=$(timeout 1 "$zellij_bin" --session "$session_name" action list-clients 2>/dev/null |
+            awk 'NR > 1 && $1 ~ /^[0-9]+$/ { c++ } END { print c + 0 }')
+        if [[ "$client_count" -gt 0 ]]; then
+            break
+        fi
+        client_wait=$((client_wait + 1))
+        sleep 0.3
+    done
+
+    if [[ "$client_count" -le 0 ]]; then
+        printf '{"ok":true,"session":"%s","tab":"%s","pending":true}\n' "$session_name" "$tab_name"
+        return 0
+    fi
+
+    local tabs=""
+    tabs=$(timeout 2 "$zellij_bin" --session "$session_name" action query-tab-names 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
+    if ! echo "$tabs" | grep -Fqx "$tab_name" 2>/dev/null; then
+        printf '{"ok":true,"session":"%s","tab":"%s","exists":false}\n' "$session_name" "$tab_name"
+        return 0
+    fi
+
+    local i=0
+    while [[ $i -lt 8 ]]; do
+        if timeout 1 "$zellij_bin" --session "$session_name" action go-to-tab-name "$tab_name" >/dev/null 2>&1; then
+            printf '{"ok":true,"session":"%s","tab":"%s","exists":true,"focused":true}\n' "$session_name" "$tab_name"
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 0.2
+    done
+
+    printf '{"ok":true,"session":"%s","tab":"%s","exists":true,"pending":true}\n' "$session_name" "$tab_name"
+}

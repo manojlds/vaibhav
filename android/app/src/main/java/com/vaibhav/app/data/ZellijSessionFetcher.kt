@@ -79,6 +79,17 @@ object VaibhavApi {
         val tool: String? = null
     )
 
+    data class TabApiResponse(
+        val ok: Boolean,
+        val error: String? = null,
+        val session: String? = null,
+        @SerializedName("active_tab") val activeTab: String? = null,
+        val tab: String? = null,
+        val pending: Boolean = false,
+        val focused: Boolean = false,
+        val exists: Boolean = true
+    )
+
     suspend fun killSession(filesBaseUrl: String, sessionName: String): ApiResponse = withContext(Dispatchers.IO) {
         try {
             val url = URL("${filesBaseUrl.trimEnd('/')}/api/kill")
@@ -126,6 +137,52 @@ object VaibhavApi {
         } catch (e: Exception) {
             Log.e(TAG, "Open failed: ${e.message}")
             ApiResponse(ok = false, error = e.message)
+        }
+    }
+
+    suspend fun getActiveTab(filesBaseUrl: String, session: String): TabApiResponse = withContext(Dispatchers.IO) {
+        try {
+            val url = URL("${filesBaseUrl.trimEnd('/')}/api/active-tab")
+            val conn = url.openConnection() as HttpURLConnection
+            if (conn is HttpsURLConnection) installTrustAll(conn)
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            conn.setRequestProperty("Content-Type", "application/json")
+
+            val body = """{"session":"$session"}"""
+            conn.outputStream.bufferedWriter().use { it.write(body) }
+
+            val json = conn.inputStream.bufferedReader().readText()
+            conn.disconnect()
+            gson.fromJson(json, TabApiResponse::class.java)
+        } catch (e: Exception) {
+            Log.e(TAG, "Active tab fetch failed: ${e.message}")
+            TabApiResponse(ok = false, error = e.message)
+        }
+    }
+
+    suspend fun focusTab(filesBaseUrl: String, session: String, tab: String): TabApiResponse = withContext(Dispatchers.IO) {
+        try {
+            val url = URL("${filesBaseUrl.trimEnd('/')}/api/focus-tab")
+            val conn = url.openConnection() as HttpURLConnection
+            if (conn is HttpsURLConnection) installTrustAll(conn)
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.connectTimeout = 12000
+            conn.readTimeout = 12000
+            conn.setRequestProperty("Content-Type", "application/json")
+
+            val body = """{"session":"$session","tab":"$tab"}"""
+            conn.outputStream.bufferedWriter().use { it.write(body) }
+
+            val json = conn.inputStream.bufferedReader().readText()
+            conn.disconnect()
+            gson.fromJson(json, TabApiResponse::class.java)
+        } catch (e: Exception) {
+            Log.e(TAG, "Focus tab failed: ${e.message}")
+            TabApiResponse(ok = false, error = e.message)
         }
     }
 
