@@ -20,6 +20,27 @@ jobs:
       - name: Generate checksums
         run: ./bin/generate-checksums
 
+      - name: Set up Java 17 for Android build
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Build Android debug APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -35,3 +56,4 @@ jobs:
             tmux.conf
             zellij.kdl
             checksums.sha256
+            android/app/build/outputs/apk/debug/vaibhav-*-debug.apk
