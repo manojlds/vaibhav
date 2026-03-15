@@ -49,7 +49,6 @@ fun TerminalScreen(
 ) {
     var ctrlState by remember { mutableStateOf(ModifierState.OFF) }
     var altState by remember { mutableStateOf(ModifierState.OFF) }
-    var showArrows by remember { mutableStateOf(false) }
     var ctrlLastTap by remember { mutableLongStateOf(0L) }
     var altLastTap by remember { mutableLongStateOf(0L) }
     var webViewRef by remember { mutableStateOf<TerminalWebView?>(null) }
@@ -456,22 +455,12 @@ fun TerminalScreen(
         ExtraKeysBar(
             ctrlState = ctrlState,
             altState = altState,
-            showArrows = showArrows,
             onKeyPress = { keyCode ->
                 if (keyCode == KeyEvent.KEYCODE_DEL) {
-                    val ctrl = ctrlState != ModifierState.OFF
-                    val alt = altState != ModifierState.OFF
-                    webViewRef?.sendKeyViaJavascript("Backspace", ctrl, alt, false)
+                    webViewRef?.sendBackspace(false, false, false)
                 } else {
                     webViewRef?.dispatchKeyWithModifiers(keyCode)
                 }
-                if (ctrlState == ModifierState.ON) ctrlState = ModifierState.OFF
-                if (altState == ModifierState.ON) altState = ModifierState.OFF
-            },
-            onTextKey = { text ->
-                val ctrl = ctrlState != ModifierState.OFF
-                val alt = altState != ModifierState.OFF
-                webViewRef?.sendKeyViaJavascript(text, ctrl, alt, false)
                 if (ctrlState == ModifierState.ON) ctrlState = ModifierState.OFF
                 if (altState == ModifierState.ON) altState = ModifierState.OFF
             },
@@ -484,10 +473,6 @@ fun TerminalScreen(
                 val now = SystemClock.uptimeMillis()
                 altState = altState.next(altLastTap, now)
                 altLastTap = now
-            },
-            onArrowToggle = { showArrows = !showArrows },
-            onArrowSwipe = { keyCode ->
-                webViewRef?.dispatchKeyWithModifiers(keyCode)
             },
             onKeyboardRequest = {
                 webViewRef?.showKeyboard()
@@ -539,6 +524,38 @@ private fun injectTerminalFixes(view: WebView?) {
                 document.head.appendChild(style);
             }
 
+            function sendDelByte() {
+                try {
+                    if (window.term && typeof window.term.input === 'function') {
+                        window.term.input(String.fromCharCode(127)); // DEL (^?)
+                        return true;
+                    }
+                } catch (e) {}
+                return false;
+            }
+
+            function wireTextAreaBackspace(ta) {
+                if (!ta || ta.__vaibhavBackspaceWired) return;
+                ta.__vaibhavBackspaceWired = true;
+
+                ta.addEventListener('beforeinput', function(ev) {
+                    if (!ev) return;
+                    if (ev.inputType === 'deleteContentBackward') {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        sendDelByte();
+                    }
+                }, true);
+
+                ta.addEventListener('input', function(ev) {
+                    if (!ev) return;
+                    if (ev.inputType === 'deleteContentBackward') {
+                        ta.value = '';
+                        sendDelByte();
+                    }
+                }, true);
+            }
+
             function fixTextArea() {
                 var ta = document.querySelector('.xterm-helper-textarea');
                 if (!ta) return null;
@@ -547,6 +564,7 @@ private fun injectTerminalFixes(view: WebView?) {
                 ta.setAttribute('spellcheck', 'false');
                 ta.setAttribute('autocomplete', 'off');
                 ta.setAttribute('inputmode', 'text');
+                wireTextAreaBackspace(ta);
                 return ta;
             }
 
@@ -557,9 +575,34 @@ private fun injectTerminalFixes(view: WebView?) {
                 }
             }
 
+            function installBackspaceBridge() {
+                if (window.__vaibhavBackspaceBridgeInstalled) return;
+                window.__vaibhavBackspaceBridgeInstalled = true;
+
+                document.addEventListener('keydown', function(ev) {
+                    if (!ev || ev.key !== 'Backspace') return;
+                    var target = ev.target;
+                    var active = document.activeElement;
+                    var inTerminal = false;
+                    if (target && target.classList && target.classList.contains('xterm-helper-textarea')) {
+                        inTerminal = true;
+                    } else if (target && target.closest && target.closest('.xterm')) {
+                        inTerminal = true;
+                    } else if (active && active.classList && active.classList.contains('xterm-helper-textarea')) {
+                        inTerminal = true;
+                    }
+                    if (!inTerminal) return;
+
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    sendDelByte();
+                }, true);
+            }
+
             if (!window.__vaibhav_terminal_patched__) {
                 window.__vaibhav_terminal_patched__ = true;
                 patchStyle();
+                installBackspaceBridge();
 
                 document.addEventListener('pointerdown', function(ev) {
                     var target = ev && ev.target;
@@ -576,6 +619,7 @@ private fun injectTerminalFixes(view: WebView?) {
             }
 
             patchStyle();
+            installBackspaceBridge();
             focusTextArea();
         })();
     """.trimIndent()

@@ -950,8 +950,15 @@ api_open_project() {
     escaped_path=$(printf '%s' "$project_path" | sed "s/'/'\"'\"'/g")
 
     # Always try to anchor current visible pane to project cwd (helps Tab #1 case).
+    # Also normalize erase char and readline bindings so mobile DEL/backspace works in bare shells.
     local cwd_applied=false
-    if write_chars_retry "cd '$escaped_path'" && press_enter_retry; then
+    local init_cmd="stty sane >/dev/null 2>&1 || true; stty erase '^?' >/dev/null 2>&1 || true; bind '\"\\C-h\": backward-delete-char' >/dev/null 2>&1 || true; bind '\"\\C-?\": backward-delete-char' >/dev/null 2>&1 || true; if [ -n \"\$ZSH_VERSION\" ]; then bindkey -e >/dev/null 2>&1 || true; bindkey '^?' backward-delete-char >/dev/null 2>&1 || true; bindkey '^H' backward-delete-char >/dev/null 2>&1 || true; bindkey '^[[3~' delete-char >/dev/null 2>&1 || true; bindkey -M main '^?' backward-delete-char >/dev/null 2>&1 || true; bindkey -M main '^H' backward-delete-char >/dev/null 2>&1 || true; bindkey -M main '^[[3~' delete-char >/dev/null 2>&1 || true; bindkey -M emacs '^?' backward-delete-char >/dev/null 2>&1 || true; bindkey -M emacs '^H' backward-delete-char >/dev/null 2>&1 || true; bindkey -M emacs '^[[3~' delete-char >/dev/null 2>&1 || true; bindkey -M viins '^?' vi-backward-delete-char >/dev/null 2>&1 || true; bindkey -M viins '^H' vi-backward-delete-char >/dev/null 2>&1 || true; bindkey -M viins '^[[3~' vi-delete-char >/dev/null 2>&1 || true; bindkey -M vicmd '^?' backward-delete-char >/dev/null 2>&1 || true; bindkey -M vicmd '^H' backward-delete-char >/dev/null 2>&1 || true; bindkey -M vicmd '^[[3~' delete-char >/dev/null 2>&1 || true; fi; cd '$escaped_path'"
+
+    apply_init_cmd_retry() {
+        write_chars_retry "$init_cmd" && press_enter_retry
+    }
+
+    if apply_init_cmd_retry; then
         cwd_applied=true
     fi
 
@@ -967,6 +974,11 @@ api_open_project() {
         fi
 
         if focus_tab_retry "shell"; then
+            # Re-apply inside the actual shell tab so erase/cwd are correct there as well.
+            if apply_init_cmd_retry; then
+                cwd_applied=true
+            fi
+
             if [[ "$shell_created" == "true" ]]; then
                 printf '{"ok":true,"session":"%s","shell_tab_created":true,"cwd_applied":%s}\n' "$project_name" "$cwd_applied"
             else

@@ -1,15 +1,12 @@
 package com.vaibhav.app.ui.components
 
 import android.view.KeyEvent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -20,7 +17,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vaibhav.app.model.ModifierState
-import kotlin.math.abs
 
 data class ExtraKeyAction(
     val label: String,
@@ -33,13 +29,9 @@ data class ExtraKeyAction(
 fun ExtraKeysBar(
     ctrlState: ModifierState,
     altState: ModifierState,
-    showArrows: Boolean,
     onKeyPress: (keyCode: Int) -> Unit,
-    onTextKey: (text: String) -> Unit,
     onCtrlToggle: () -> Unit,
     onAltToggle: () -> Unit,
-    onArrowToggle: () -> Unit,
-    onArrowSwipe: (keyCode: Int) -> Unit,
     onKeyboardRequest: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -50,36 +42,7 @@ fun ExtraKeysBar(
     val textColor = Color(0xFFF8F8F2)
 
     Column(modifier = modifier.background(barColor)) {
-        // Arrow keys row (toggle visibility)
-        AnimatedVisibility(visible = showArrows) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 2.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                KeyButton("PgUp", keyColor, textColor, Modifier.weight(1f)) {
-                    onKeyPress(KeyEvent.KEYCODE_PAGE_UP)
-                }
-                KeyButton("◀", keyColor, textColor, Modifier.weight(1f)) {
-                    onKeyPress(KeyEvent.KEYCODE_DPAD_LEFT)
-                }
-                KeyButton("▲", keyColor, textColor, Modifier.weight(1f)) {
-                    onKeyPress(KeyEvent.KEYCODE_DPAD_UP)
-                }
-                KeyButton("▼", keyColor, textColor, Modifier.weight(1f)) {
-                    onKeyPress(KeyEvent.KEYCODE_DPAD_DOWN)
-                }
-                KeyButton("▶", keyColor, textColor, Modifier.weight(1f)) {
-                    onKeyPress(KeyEvent.KEYCODE_DPAD_RIGHT)
-                }
-                KeyButton("PgDn", keyColor, textColor, Modifier.weight(1f)) {
-                    onKeyPress(KeyEvent.KEYCODE_PAGE_DOWN)
-                }
-            }
-        }
-
-        // Main extra keys row
+        // Main row
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -120,34 +83,41 @@ fun ExtraKeysBar(
                 onKeyPress(KeyEvent.KEYCODE_DEL)
             }
 
-            // Arrow keys toggle / swipe button
-            ArrowButton(
-                showArrows = showArrows,
-                keyColor = keyColor,
-                activeColor = activeColor,
-                textColor = textColor,
-                modifier = Modifier.weight(1f),
-                onToggle = onArrowToggle,
-                onSwipe = onArrowSwipe
-            )
-
             KeyButton("KBD", keyColor, textColor, Modifier.weight(1f)) {
                 onKeyboardRequest()
             }
         }
 
-        // Symbols row (Termux-style)
+        // Navigation row (always visible)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 2.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            val symbols = listOf("-", "/", "|", "~", "{", "}", "[", "]", "_", ":")
-            symbols.forEach { sym ->
-                KeyButton(sym, keyColor, textColor, Modifier.weight(1f)) {
-                    onTextKey(sym)
-                }
+            KeyButton("PgUp", keyColor, textColor, Modifier.weight(1f)) {
+                onKeyPress(KeyEvent.KEYCODE_PAGE_UP)
+            }
+            KeyButton("Home", keyColor, textColor, Modifier.weight(1f)) {
+                onKeyPress(KeyEvent.KEYCODE_MOVE_HOME)
+            }
+            KeyButton("◀", keyColor, textColor, Modifier.weight(1f)) {
+                onKeyPress(KeyEvent.KEYCODE_DPAD_LEFT)
+            }
+            KeyButton("▲", keyColor, textColor, Modifier.weight(1f)) {
+                onKeyPress(KeyEvent.KEYCODE_DPAD_UP)
+            }
+            KeyButton("▼", keyColor, textColor, Modifier.weight(1f)) {
+                onKeyPress(KeyEvent.KEYCODE_DPAD_DOWN)
+            }
+            KeyButton("▶", keyColor, textColor, Modifier.weight(1f)) {
+                onKeyPress(KeyEvent.KEYCODE_DPAD_RIGHT)
+            }
+            KeyButton("End", keyColor, textColor, Modifier.weight(1f)) {
+                onKeyPress(KeyEvent.KEYCODE_MOVE_END)
+            }
+            KeyButton("PgDn", keyColor, textColor, Modifier.weight(1f)) {
+                onKeyPress(KeyEvent.KEYCODE_PAGE_DOWN)
             }
         }
     }
@@ -240,72 +210,6 @@ private fun ModifierButton(
             fontFamily = FontFamily.Monospace,
             textAlign = TextAlign.Center,
             maxLines = 1
-        )
-    }
-}
-
-@Composable
-private fun ArrowButton(
-    showArrows: Boolean,
-    keyColor: Color,
-    activeColor: Color,
-    textColor: Color,
-    modifier: Modifier = Modifier,
-    onToggle: () -> Unit,
-    onSwipe: (keyCode: Int) -> Unit
-) {
-    val bgColor = if (showArrows) activeColor else keyColor
-    val fgColor = if (showArrows) Color.Black else textColor
-    val dragThreshold = 60f
-
-    Box(
-        modifier = modifier
-            .padding(1.dp)
-            .height(36.dp)
-            .background(bgColor, RoundedCornerShape(4.dp))
-            .border(0.5.dp, Color(0xFF444466), RoundedCornerShape(4.dp))
-            .pointerInput(Unit) {
-                var offsetX = 0f
-                var offsetY = 0f
-                var isDrag = false
-
-                detectDragGestures(
-                    onDragStart = {
-                        offsetX = 0f
-                        offsetY = 0f
-                        isDrag = false
-                    },
-                    onDrag = { _, dragAmount ->
-                        offsetX += dragAmount.x
-                        offsetY += dragAmount.y
-                        if (abs(offsetX) > dragThreshold || abs(offsetY) > dragThreshold) {
-                            isDrag = true
-                        }
-                    },
-                    onDragEnd = {
-                        if (isDrag) {
-                            val keyCode = when {
-                                abs(offsetY) > abs(offsetX) && offsetY > dragThreshold -> KeyEvent.KEYCODE_DPAD_DOWN
-                                abs(offsetY) > abs(offsetX) && offsetY < -dragThreshold -> KeyEvent.KEYCODE_DPAD_UP
-                                abs(offsetX) > abs(offsetY) && offsetX > dragThreshold -> KeyEvent.KEYCODE_DPAD_RIGHT
-                                abs(offsetX) > abs(offsetY) && offsetX < -dragThreshold -> KeyEvent.KEYCODE_DPAD_LEFT
-                                else -> null
-                            }
-                            keyCode?.let { onSwipe(it) }
-                        } else {
-                            onToggle()
-                        }
-                    }
-                )
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = "⇄",
-            color = fgColor,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
         )
     }
 }

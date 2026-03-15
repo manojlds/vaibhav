@@ -12,6 +12,9 @@ show_release_notes false
 // Keep mouse/touch interactions enabled
 mouse_mode true
 
+// Web client backspace/modifier behavior is more stable without kitty keyboard protocol.
+support_kitty_keyboard_protocol false
+
 // Convenience keys similar to tmux mobile workflow
 keybinds {
     shared_except "locked" {
@@ -27,5 +30,14 @@ keybinds {
                 y "10%"
             }
         }
+
+        // Guard rails for mobile keyboards: disable default tab-move chords if present.
+        bind "Alt i" { SwitchToMode "normal"; }
+        bind "Alt o" { SwitchToMode "normal"; }
+    }
+
+    // Prevent Ctrl+H from entering move mode on configs that still include default bindings.
+    shared_except "locked" "move" {
+        bind "Ctrl h" { SwitchToMode "normal"; }
     }
 }

@@ -81,8 +81,7 @@ class TerminalWebView @JvmOverloads constructor(
                                 dispatchTerminalKey(KeyEvent.KEYCODE_ENTER, meta)
                             }
                             ch == '\b' || ch.code == 127 -> {
-                                val meta = provider?.getMetaState() ?: 0
-                                dispatchTerminalKey(KeyEvent.KEYCODE_DEL, meta)
+                                sendBackspace(false, false, false)
                             }
                             else -> {
                                 val handled = baseConnection?.commitText(ch.toString(), 1)
@@ -102,11 +101,24 @@ class TerminalWebView @JvmOverloads constructor(
 
             override fun sendKeyEvent(event: KeyEvent): Boolean {
                 val provider = modifierProvider
-                if (provider != null && provider.getMetaState() != 0) {
+                val providerMeta = provider?.getMetaState() ?: 0
+                val effectiveMeta = event.metaState or providerMeta
+
+                if (event.keyCode == KeyEvent.KEYCODE_DEL) {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        sendBackspace(false, false, false)
+                    }
+                    if (event.action == KeyEvent.ACTION_UP && provider != null && providerMeta != 0) {
+                        provider.onModifierUsed()
+                    }
+                    return true
+                }
+
+                if (provider != null && providerMeta != 0) {
                     val modifiedEvent = KeyEvent(
                         event.downTime, event.eventTime, event.action,
                         event.keyCode, event.repeatCount,
-                        event.metaState or provider.getMetaState()
+                        effectiveMeta
                     )
                     if (event.action == KeyEvent.ACTION_UP) {
                         provider.onModifierUsed()
@@ -123,11 +135,10 @@ class TerminalWebView @JvmOverloads constructor(
             }
 
             override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                // Convert backspace to key event for xterm.js compatibility
+                // Convert backspace to terminal-safe key path for xterm/zellij compatibility
                 if (beforeLength > 0 && afterLength == 0) {
-                    val meta = modifierProvider?.getMetaState() ?: 0
                     repeat(beforeLength.coerceAtMost(8)) {
-                        dispatchTerminalKey(KeyEvent.KEYCODE_DEL, meta)
+                        sendBackspace(false, false, false)
                     }
                     return true
                 }
@@ -137,9 +148,8 @@ class TerminalWebView @JvmOverloads constructor(
 
             override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
                 if (beforeLength > 0 && afterLength == 0) {
-                    val meta = modifierProvider?.getMetaState() ?: 0
                     repeat(beforeLength.coerceAtMost(8)) {
-                        dispatchTerminalKey(KeyEvent.KEYCODE_DEL, meta)
+                        sendBackspace(false, false, false)
                     }
                     return true
                 }
@@ -174,6 +184,73 @@ class TerminalWebView @JvmOverloads constructor(
         val now = SystemClock.uptimeMillis()
         dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0, meta))
         dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0, meta))
+    }
+
+    private fun buildMetaState(ctrlActive: Boolean, altActive: Boolean, metaActive: Boolean): Int {
+        var state = 0
+        if (ctrlActive) state = state or KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+        if (altActive) state = state or KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON
+        if (metaActive) state = state or KeyEvent.META_META_ON
+        return state
+    }
+
+    fun sendBackspace(ctrlActive: Boolean, altActive: Boolean, metaActive: Boolean) {
+        focusTerminalInput()
+
+        val fallbackMeta = buildMetaState(ctrlActive, altActive, metaActive)
+        val js = """
+            (function() {
+                // Prefer xterm public API. This bypasses browser key-event quirks and sends
+                // the exact byte to the backend PTY through term.onData.
+                try {
+                    if (window.term && typeof window.term.input === 'function') {
+                        window.term.input(String.fromCharCode(127)); // DEL (^?)
+                        return true;
+                    }
+                } catch (e) {}
+
+                const target = document.querySelector('.xterm-helper-textarea') || document.activeElement || document.body;
+                if (!target) return false;
+
+                try { target.focus(); } catch (e) {}
+
+                let sent = false;
+
+                try {
+                    const options = {
+                        key: 'Backspace',
+                        code: 'Backspace',
+                        keyCode: 8,
+                        which: 8,
+                        charCode: 0,
+                        ctrlKey: $ctrlActive,
+                        altKey: $altActive,
+                        metaKey: $metaActive,
+                        bubbles: true,
+                        cancelable: true
+                    };
+                    target.dispatchEvent(new KeyboardEvent('keydown', options));
+                    target.dispatchEvent(new KeyboardEvent('keyup', options));
+                    sent = true;
+                } catch (e) {}
+
+                // xterm.js also listens on textarea input; feed a DEL byte as fallback.
+                try {
+                    target.value = String.fromCharCode(127);
+                    target.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                    target.value = '';
+                    sent = true;
+                } catch (e) {}
+
+                return sent;
+            })();
+        """.trimIndent()
+
+        evaluateJavascript(js) { result ->
+            if (result != "true") {
+                dispatchTerminalKey(KeyEvent.KEYCODE_DEL, fallbackMeta)
+            }
+        }
     }
 
     fun sendKeyViaJavascript(key: String, ctrlActive: Boolean, altActive: Boolean, metaActive: Boolean) {
