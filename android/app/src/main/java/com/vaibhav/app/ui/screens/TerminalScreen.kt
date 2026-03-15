@@ -1,6 +1,7 @@
 package com.vaibhav.app.ui.screens
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.graphics.Bitmap
 import android.net.http.SslError
 import android.os.SystemClock
@@ -8,6 +9,8 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.*
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -18,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -44,11 +48,63 @@ fun TerminalScreen(
     var ctrlLastTap by remember { mutableLongStateOf(0L) }
     var altLastTap by remember { mutableLongStateOf(0L) }
     var webViewRef by remember { mutableStateOf<TerminalWebView?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
+    val initialSession = config.normalizedSessionName
+    var currentSessionPath by remember(config.host, config.port, initialSession) { mutableStateOf(initialSession) }
+    var activeUrl by remember(config.host, config.port, initialSession) {
+        mutableStateOf(
+            if (initialSession.isBlank()) "about:blank"
+            else "https://${config.host}:${config.port}/$initialSession"
+        )
+    }
+    var isLoading by remember(config.host, config.port, initialSession) { mutableStateOf(initialSession.isNotBlank()) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var errorUrl by remember { mutableStateOf("") }
     var showSwitcher by remember { mutableStateOf(false) }
-    var currentSessionPath by remember { mutableStateOf(config.zellijSessionName) }
+    var retryInProgress by remember { mutableStateOf(false) }
+    var lastConnectionToastMessage by remember { mutableStateOf("") }
+    var lastConnectionToastAt by remember { mutableLongStateOf(0L) }
+    var lastBackPressAt by remember { mutableLongStateOf(0L) }
+    val appContext = LocalContext.current
+
+    fun showConnectionToast(message: String) {
+        val now = SystemClock.uptimeMillis()
+        val isDuplicate =
+            message == lastConnectionToastMessage && (now - lastConnectionToastAt) < 2500L
+        if (!isDuplicate) {
+            Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+            lastConnectionToastMessage = message
+            lastConnectionToastAt = now
+        }
+    }
+
+    fun normalizeUrl(url: String): String = url.trim().trimEnd('/')
+
+    LaunchedEffect(config.host, config.port, initialSession) {
+        if (initialSession.isBlank()) {
+            // Do not load an arbitrary session; open switcher first.
+            activeUrl = "about:blank"
+            isLoading = false
+            loadError = null
+            errorUrl = ""
+            showSwitcher = true
+            onSwitcherRequest()
+        }
+    }
+
+    BackHandler(enabled = true) {
+        if (showSwitcher) {
+            showSwitcher = false
+            return@BackHandler
+        }
+
+        val now = SystemClock.uptimeMillis()
+        if (now - lastBackPressAt < 1500L) {
+            (appContext as? Activity)?.finish()
+        } else {
+            lastBackPressAt = now
+            Toast.makeText(appContext, "Swipe back again to exit", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val modifierProvider = remember {
         object : ModifierProvider {
@@ -66,7 +122,7 @@ fun TerminalScreen(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
+    Column(modifier = modifier.fillMaxSize().imePadding()) {
         // Top bar with switcher button
         Row(
             modifier = Modifier
@@ -137,6 +193,11 @@ fun TerminalScreen(
                                 if (loadError == null) {
                                     isLoading = false
                                     injectTerminalFixes(view)
+                                    webViewRef?.focusTerminalInput()
+                                    if (retryInProgress) {
+                                        Toast.makeText(appContext, "Reconnected", Toast.LENGTH_SHORT).show()
+                                        retryInProgress = false
+                                    }
                                 }
                             }
 
@@ -146,9 +207,20 @@ fun TerminalScreen(
                                 error: WebResourceError?
                             ) {
                                 if (request?.isForMainFrame == true) {
-                                    loadError = error?.description?.toString() ?: "Connection failed"
-                                    errorUrl = request.url?.toString() ?: ""
+                                    val failingUrl = request.url?.toString() ?: ""
+                                    val message = error?.description?.toString() ?: "Connection failed"
+
+                                    if (failingUrl == "about:blank") return
+                                    if (message.contains("ERR_ABORTED", ignoreCase = true)) return
+                                    if (activeUrl != "about:blank" &&
+                                        normalizeUrl(failingUrl) != normalizeUrl(activeUrl)
+                                    ) return
+
+                                    loadError = message
+                                    errorUrl = failingUrl
                                     isLoading = false
+                                    retryInProgress = false
+                                    showConnectionToast("Cannot connect: $message")
                                     // Hide WebView to suppress Chrome's default error page
                                     view?.visibility = View.INVISIBLE
                                     // Load blank to clear the error page from back stack
@@ -162,11 +234,19 @@ fun TerminalScreen(
                                 errorResponse: WebResourceResponse?
                             ) {
                                 if (request?.isForMainFrame == true) {
+                                    val failingUrl = request.url?.toString() ?: ""
                                     val code = errorResponse?.statusCode ?: 0
                                     if (code >= 400) {
+                                        if (failingUrl == "about:blank") return
+                                        if (activeUrl != "about:blank" &&
+                                            normalizeUrl(failingUrl) != normalizeUrl(activeUrl)
+                                        ) return
+
                                         loadError = "HTTP $code"
-                                        errorUrl = request.url?.toString() ?: ""
+                                        errorUrl = failingUrl
                                         isLoading = false
+                                        retryInProgress = false
+                                        showConnectionToast("Cannot connect: HTTP $code")
                                         view?.visibility = View.INVISIBLE
                                         view?.loadUrl("about:blank")
                                     }
@@ -188,7 +268,7 @@ fun TerminalScreen(
                             )
                         }
 
-                        loadUrl(config.zellijWebUrl)
+                        loadUrl(activeUrl)
 
                         webViewRef = this
                     }
@@ -244,8 +324,10 @@ fun TerminalScreen(
                             loadError = null
                             errorUrl = ""
                             isLoading = true
+                            retryInProgress = true
+                            Toast.makeText(appContext, "Retrying connection...", Toast.LENGTH_SHORT).show()
                             webViewRef?.visibility = View.VISIBLE
-                            webViewRef?.loadUrl(config.zellijWebUrl)
+                            webViewRef?.loadUrl(activeUrl)
                         }) {
                             Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
@@ -268,7 +350,13 @@ fun TerminalScreen(
             altState = altState,
             showArrows = showArrows,
             onKeyPress = { keyCode ->
-                webViewRef?.dispatchKeyWithModifiers(keyCode)
+                if (keyCode == KeyEvent.KEYCODE_DEL) {
+                    val ctrl = ctrlState != ModifierState.OFF
+                    val alt = altState != ModifierState.OFF
+                    webViewRef?.sendKeyViaJavascript("Backspace", ctrl, alt, false)
+                } else {
+                    webViewRef?.dispatchKeyWithModifiers(keyCode)
+                }
                 if (ctrlState == ModifierState.ON) ctrlState = ModifierState.OFF
                 if (altState == ModifierState.ON) altState = ModifierState.OFF
             },
@@ -293,6 +381,9 @@ fun TerminalScreen(
             onArrowSwipe = { keyCode ->
                 webViewRef?.dispatchKeyWithModifiers(keyCode)
             },
+            onKeyboardRequest = {
+                webViewRef?.showKeyboard()
+            },
             modifier = Modifier.navigationBarsPadding()
         )
     }
@@ -303,12 +394,14 @@ fun TerminalScreen(
             config = config,
             currentSessionPath = currentSessionPath,
             onSessionSelect = { sessionName ->
-                showSwitcher = false
-                currentSessionPath = sessionName
-                val url = "https://${config.host}:${config.port}/$sessionName"
+                val normalizedSession = sessionName.trim().trim('/')
+                currentSessionPath = normalizedSession
+                val url = "https://${config.host}:${config.port}/$normalizedSession"
+                activeUrl = url
                 loadError = null
                 errorUrl = ""
                 isLoading = true
+                retryInProgress = false
                 webViewRef?.visibility = View.VISIBLE
                 webViewRef?.loadUrl(url)
             },
@@ -329,21 +422,52 @@ private fun injectTerminalFixes(view: WebView?) {
 
     val js = """
         (function() {
-            var style = document.createElement('style');
-            style.innerHTML = `$css`;
-            document.head.appendChild(style);
+            function patchStyle() {
+                if (document.getElementById('__vaibhav_terminal_style__')) return;
+                var style = document.createElement('style');
+                style.id = '__vaibhav_terminal_style__';
+                style.innerHTML = `$css`;
+                document.head.appendChild(style);
+            }
 
             function fixTextArea() {
                 var ta = document.querySelector('.xterm-helper-textarea');
+                if (!ta) return null;
+                ta.setAttribute('autocorrect', 'off');
+                ta.setAttribute('autocapitalize', 'off');
+                ta.setAttribute('spellcheck', 'false');
+                ta.setAttribute('autocomplete', 'off');
+                ta.setAttribute('inputmode', 'text');
+                return ta;
+            }
+
+            function focusTextArea() {
+                var ta = fixTextArea();
                 if (ta) {
-                    ta.setAttribute('autocorrect', 'off');
-                    ta.setAttribute('autocapitalize', 'off');
-                    ta.setAttribute('spellcheck', 'false');
-                    ta.setAttribute('autocomplete', 'off');
+                    ta.focus();
                 }
             }
-            setInterval(fixTextArea, 1000);
-            fixTextArea();
+
+            if (!window.__vaibhav_terminal_patched__) {
+                window.__vaibhav_terminal_patched__ = true;
+                patchStyle();
+
+                document.addEventListener('pointerdown', function(ev) {
+                    var target = ev && ev.target;
+                    if (target && target.closest && target.closest('.xterm')) {
+                        setTimeout(focusTextArea, 0);
+                    }
+                }, true);
+
+                window.addEventListener('focus', function() {
+                    setTimeout(focusTextArea, 0);
+                });
+
+                setInterval(fixTextArea, 700);
+            }
+
+            patchStyle();
+            focusTextArea();
         })();
     """.trimIndent()
     view?.evaluateJavascript(js, null)

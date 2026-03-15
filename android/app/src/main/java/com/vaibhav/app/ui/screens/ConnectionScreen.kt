@@ -98,6 +98,7 @@ fun ConnectionScreen(
                 onValueChange = { sessionName = it },
                 label = { Text("Zellij Session Name (optional)") },
                 placeholder = { Text("e.g. heimdall") },
+                supportingText = { Text("Leave blank to open switcher first and choose a project/session.") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
