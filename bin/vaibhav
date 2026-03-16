@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vaibhav - Project session manager for AI coding tools over tmux or zellij
+# vaibhav - Project session manager for AI coding tools over tmux
 # Usage:
 #   vaibhav init              - Interactive setup (creates ~/.config/vaibhav/config)
 #   vaibhav list              - List all registered projects and active sessions
@@ -33,51 +33,15 @@ source "$VAIBHAV_LIB/ui.sh"
 # shellcheck source=../lib/mux.sh
 source "$VAIBHAV_LIB/mux.sh"
 
-# --- Parse --mux flag ---
-VAIBHAV_MUX_OVERRIDE=""
-parsed_args=()
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --mux)
-            if [[ $# -lt 2 ]]; then
-                echo -e "${RED}Error:${NC} --mux requires a value (tmux|zellij|auto)"
-                exit 1
-            fi
-            VAIBHAV_MUX_OVERRIDE=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
-            shift 2
-            ;;
-        --mux=*)
-            VAIBHAV_MUX_OVERRIDE=$(printf '%s' "${1#--mux=}" | tr '[:upper:]' '[:lower:]')
-            shift
-            ;;
-        *)
-            parsed_args+=("$1")
-            shift
-            ;;
-    esac
-done
-set -- "${parsed_args[@]}"
-
-if [[ -n "$VAIBHAV_MUX_OVERRIDE" ]]; then
-    case "$VAIBHAV_MUX_OVERRIDE" in
-        tmux|zellij|auto)
-            ;;
-        *)
-            echo -e "${RED}Error:${NC} Invalid --mux value '${VAIBHAV_MUX_OVERRIDE}' (expected: tmux|zellij|auto)"
-            exit 1
-            ;;
-    esac
-fi
-
 # --- Resolve multiplexer backend ---
-VAIBHAV_MULTIPLEXER="$(normalize_multiplexer_preference "${VAIBHAV_MULTIPLEXER:-auto}")"
-if [[ -n "$VAIBHAV_MUX_OVERRIDE" ]]; then
-    VAIBHAV_MULTIPLEXER="$VAIBHAV_MUX_OVERRIDE"
+# shellcheck disable=SC2034 # used by sourced lib modules
+VAIBHAV_MULTIPLEXER="tmux"
+# shellcheck disable=SC2034 # used by sourced lib modules
+if command -v tmux &>/dev/null; then
+    VAIBHAV_MUX_BACKEND="tmux"
+else
+    VAIBHAV_MUX_BACKEND=""
 fi
-# shellcheck disable=SC2034 # used by sourced lib modules
-VAIBHAV_ZELLIJ_BIN="$(resolve_zellij_binary)"
-# shellcheck disable=SC2034 # used by sourced lib modules
-VAIBHAV_MUX_BACKEND="$(resolve_multiplexer_backend "$VAIBHAV_MULTIPLEXER")"
 
 # --- Remote dispatch (may exec into SSH/mosh and never return) ---
 # shellcheck source=../lib/remote.sh
@@ -166,25 +130,6 @@ case "${1:-}" in
         else
             update_desktop
         fi
-        ;;
-    api)
-        case "${2:-}" in
-            kill)
-                api_kill_session "${3:-}"
-                ;;
-            open)
-                api_open_project "${3:-}" "${4:-}"
-                ;;
-            active-tab)
-                api_active_tab "${3:-}"
-                ;;
-            focus-tab)
-                api_focus_tab "${3:-}" "${4:-}"
-                ;;
-            *)
-                api_status
-                ;;
-        esac
         ;;
     share)
         shift

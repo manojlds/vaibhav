@@ -48,67 +48,6 @@ else
     skip "tmux server not running (config applies on next start)"
 fi
 
-# --- zellij (optional) ---
-step "Zellij (optional multiplexer)"
-if command -v zellij &>/dev/null; then
-    ok "zellij already installed ($(zellij --version 2>/dev/null || echo 'version unknown'))"
-else
-    read -rp "  Install zellij as an alternative to tmux? [y/N] " yn
-    if [[ "$yn" =~ ^[Yy]$ ]]; then
-        CARGO_BIN=""
-        if command -v cargo &>/dev/null; then
-            CARGO_BIN="$(command -v cargo)"
-        elif [[ -x "$HOME/.cargo/bin/cargo" ]]; then
-            CARGO_BIN="$HOME/.cargo/bin/cargo"
-            export PATH="$HOME/.cargo/bin:$PATH"
-        else
-            warn "cargo not found — installing Rust toolchain with rustup"
-            if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; then
-                if [[ -f "$HOME/.cargo/env" ]]; then
-                    # shellcheck source=/dev/null
-                    source "$HOME/.cargo/env"
-                else
-                    export PATH="$HOME/.cargo/bin:$PATH"
-                fi
-                CARGO_BIN="$(command -v cargo 2>/dev/null || true)"
-            else
-                warn "rustup install failed"
-            fi
-        fi
-
-        if [[ -n "$CARGO_BIN" ]]; then
-            if "$CARGO_BIN" install --locked zellij; then
-                export PATH="$HOME/.cargo/bin:$PATH"
-                hash -r
-                if command -v zellij &>/dev/null; then
-                    ok "zellij installed ($(zellij --version 2>/dev/null || echo 'version unknown'))"
-                elif [[ -x "$HOME/.cargo/bin/zellij" ]]; then
-                    ok "zellij installed at $HOME/.cargo/bin/zellij"
-                else
-                    warn "cargo install completed but zellij is not in PATH"
-                fi
-            else
-                warn "Could not install zellij — run manually: cargo install --locked zellij"
-            fi
-        else
-            warn "cargo unavailable — install Rust first: https://rustup.rs"
-        fi
-    else
-        skip "zellij (can install later with: cargo install --locked zellij)"
-    fi
-fi
-
-# --- zellij config ---
-step "Linking zellij config (mobile-friendly)"
-mkdir -p "$HOME/.config/zellij"
-if [[ -f "$HOME/.config/zellij/config.kdl" ]] && [[ ! -L "$HOME/.config/zellij/config.kdl" ]]; then
-    backup="$HOME/.config/zellij/config.kdl.backup.$(date +%s)"
-    cp "$HOME/.config/zellij/config.kdl" "$backup"
-    warn "Backed up existing ~/.config/zellij/config.kdl to $backup"
-fi
-ln -sf "$SCRIPT_DIR/zellij.kdl" "$HOME/.config/zellij/config.kdl"
-ok "$HOME/.config/zellij/config.kdl → $SCRIPT_DIR/zellij.kdl"
-
 # --- SSH server ---
 step "Checking SSH server"
 if systemctl is-active --quiet sshd 2>/dev/null || systemctl is-active --quiet ssh 2>/dev/null; then
@@ -288,88 +227,6 @@ UNIT
     fi
 fi
 
-# --- Zellij Web systemd service ---
-step "Zellij Web (systemd service)"
-ZELLIJ_BIN=$(command -v zellij 2>/dev/null || true)
-ZELLIJ_SERVICE_FILE="$HOME/.config/systemd/user/zellij-web.service"
-
-if [[ -z "$ZELLIJ_BIN" ]]; then
-    skip "zellij-web service (zellij not installed)"
-elif systemctl --user is-active --quiet zellij-web 2>/dev/null; then
-    ok "zellij-web service already running"
-    ZJ_STATUS=$(zellij web --status 2>/dev/null || echo "status unavailable")
-    echo -e "  ${DIM}${ZJ_STATUS}${NC}"
-else
-    read -rp "  Set up Zellij Web as a systemd service? [y/N] " yn </dev/tty
-    if [[ "$yn" =~ ^[Yy]$ ]]; then
-        ZELLIJ_WEB_PORT=8082
-        ZELLIJ_WEB_HTTPS_PORT=8443
-        read -rp "  Tailscale HTTPS port [${ZELLIJ_WEB_HTTPS_PORT}]: " input_zellij_https_port </dev/tty
-        ZELLIJ_WEB_HTTPS_PORT="${input_zellij_https_port:-$ZELLIJ_WEB_HTTPS_PORT}"
-
-        mkdir -p ~/.config/systemd/user
-        cat > "$ZELLIJ_SERVICE_FILE" << UNIT
-[Unit]
-Description=Zellij Web Server
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=%h
-ExecStart=${ZELLIJ_BIN} web --start --ip 127.0.0.1 --port ${ZELLIJ_WEB_PORT}
-ExecStop=${ZELLIJ_BIN} web --stop
-ExecStartPost=-/bin/sh -c '/usr/bin/tailscale serve --bg --yes --https ${ZELLIJ_WEB_HTTPS_PORT} http://127.0.0.1:${ZELLIJ_WEB_PORT} &'
-ExecStopPost=-/usr/bin/tailscale serve --https ${ZELLIJ_WEB_HTTPS_PORT} off
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-UNIT
-        ok "Created ${ZELLIJ_SERVICE_FILE}"
-
-        # Enable lingering so service runs after logout
-        loginctl enable-linger "$USER" 2>/dev/null || true
-        ok "User lingering enabled"
-
-        systemctl --user daemon-reload
-        systemctl --user enable zellij-web
-        systemctl --user start zellij-web
-        ok "zellij-web service started"
-
-        sleep 1
-        ZJ_STATUS=$(zellij web --status 2>/dev/null || true)
-        if echo "$ZJ_STATUS" | grep -qi "online"; then
-            ok "Zellij Web healthy on 127.0.0.1:${ZELLIJ_WEB_PORT}"
-        else
-            warn "Health check failed — check: journalctl --user -u zellij-web -f"
-        fi
-
-        if command -v tailscale &>/dev/null; then
-            TS_HOSTNAME=$(tailscale status --json 2>/dev/null | grep -m1 '"DNSName"' | grep -o '"DNSName": *"[^"]*"' | cut -d'"' -f4 | sed 's/\.$//')
-            if [[ -n "$TS_HOSTNAME" ]]; then
-                if [[ "$ZELLIJ_WEB_HTTPS_PORT" == "443" ]]; then
-                    echo -e "  ${GREEN}URL:${NC} ${BOLD}https://${TS_HOSTNAME}${NC}"
-                else
-                    echo -e "  ${GREEN}URL:${NC} ${BOLD}https://${TS_HOSTNAME}:${ZELLIJ_WEB_HTTPS_PORT}${NC}"
-                fi
-            fi
-        fi
-
-        echo ""
-        read -rp "  Create a Zellij Web login token now? [Y/n] " yn </dev/tty
-        if [[ ! "$yn" =~ ^[Nn]$ ]]; then
-            if ! zellij web --create-token; then
-                warn "Could not create token (try later: vaibhav web zellij token)"
-            fi
-        else
-            skip "token creation (later: vaibhav web zellij token)"
-        fi
-    else
-        skip "zellij-web systemd service"
-    fi
-fi
-
 # --- Vaibhav Files (file sharing) ---
 step "Vaibhav Files (file sharing server)"
 SHARE_DIR="$HOME/vaibhav-share"
@@ -524,12 +381,6 @@ if systemctl --user is-active --quiet opencode-web 2>/dev/null; then
         echo -e "OpenCode Web:      ${CYAN}${WEB_URL}${NC}"
     fi
 fi
-if systemctl --user is-active --quiet zellij-web 2>/dev/null; then
-    ZELLIJ_WEB_URL=$(vaibhav web --zellij-url-only 2>/dev/null || true)
-    if [[ -n "$ZELLIJ_WEB_URL" ]]; then
-        echo -e "Zellij Web:       ${CYAN}${ZELLIJ_WEB_URL}${NC}"
-    fi
-fi
 if systemctl --user is-active --quiet vaibhav-files 2>/dev/null; then
     FILES_URL=$(vaibhav web --files-url-only 2>/dev/null || true)
     if [[ -n "$FILES_URL" ]]; then
@@ -542,6 +393,6 @@ echo -e "${BOLD}Next steps:${NC}"
 echo "  1. Run the Termux setup on your Android phone"
 echo "  2. Use 'vaibhav list' to see your projects"
 echo "  3. Use 'vaibhav <name> <tool>' to start coding"
-echo "  4. Use 'vaibhav web' to see/manage OpenCode + Zellij Web + Files"
+echo "  4. Use 'vaibhav web' to see/manage OpenCode Web + Files"
 echo ""
 echo -e "${DIM}Example: vaibhav vaibhav pi (or amp/claude/codex/opencode)${NC}"

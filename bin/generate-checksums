@@ -14,7 +14,6 @@ FILES=(
     "dist/vaibhav"
     "bin/vaibhav-ralph"
     "tmux.conf"
-    "zellij.kdl"
 )
 
 cd "$REPO_ROOT"

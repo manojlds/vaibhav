@@ -23,8 +23,7 @@ show_usage() {
     echo -e "${BOLD}Usage:${NC}"
     echo "  vaibhav init                Interactive setup"
     echo "  vaibhav list                List all projects and active sessions"
-    echo "  vaibhav --mux <backend> ... Override multiplexer for this command (tmux|zellij|auto)"
-    echo "  vaibhav <name>              Open a project in the configured multiplexer"
+    echo "  vaibhav <name>              Open a project in tmux"
     echo "  vaibhav <name> <tool>       Open a project with an AI tool (amp, claude, codex, opencode, pi)"
     echo "  vaibhav <name> --mosh       Open a project using mosh (resilient connection)"
     echo "  vaibhav <name> <tool> --mosh  Open with an AI tool via mosh"
@@ -34,7 +33,7 @@ show_usage() {
     echo "  vaibhav remove <name>       Unregister a project"
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
     echo "  vaibhav share [file] [dir]  Share files (copy to ~/vaibhav-share, list shared files)"
-    echo "  vaibhav web                 Show/manage OpenCode Web + Zellij Web + Files services"
+    echo "  vaibhav web                 Show/manage OpenCode Web + Files services"
     echo "  vaibhav doctor              Check SSH routing (LAN vs Tailscale)"
     echo "  vaibhav refresh             Detect desktop LAN IP and save it to config"
     echo "  vaibhav doctor --refresh-lan  Same as refresh + doctor output"
@@ -46,16 +45,14 @@ show_usage() {
     echo "  vaibhav init                First-time setup"
     echo "  vaibhav heimdall pi         Open heimdall project with pi"
     echo "  vaibhav doctor              See whether desktop uses LAN or Tailscale"
-    echo "  vaibhav --mux zellij heimdall amp  Test zellij on one command"
-    echo "  vaibhav --mux tmux list     Force tmux for a single call"
     echo "  vaibhav refresh             Refresh LAN IP after connecting via Tailscale"
     echo "  vaibhav scan ~/projects     Register all projects under ~/projects"
     echo "  vaibhav ralph init          Setup ralph config for current project"
     echo ""
     if [[ -n "$VAIBHAV_MUX_BACKEND" ]]; then
-        echo -e "${BOLD}Multiplexer:${NC} ${VAIBHAV_MUX_BACKEND} ${DIM}(configured: ${VAIBHAV_MULTIPLEXER})${NC}"
+        echo -e "${BOLD}Multiplexer:${NC} tmux"
     else
-        echo -e "${BOLD}Multiplexer:${NC} ${DIM}none detected (configured: ${VAIBHAV_MULTIPLEXER})${NC}"
+        echo -e "${BOLD}Multiplexer:${NC} ${DIM}tmux not found${NC}"
     fi
     echo -e "${BOLD}Config:${NC} ${CONFIG_FILE}"
 }
