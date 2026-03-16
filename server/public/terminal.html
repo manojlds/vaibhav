@@ -59,9 +59,9 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
-      height: 100%;
-      padding: 24px;
+      height: 100dvh;
+      padding: 16px 16px 0;
+      overflow-y: auto;
     }
     #picker.hidden { display: none; }
     #picker h1 {
@@ -73,12 +73,32 @@
     #picker .subtitle {
       font-size: 13px;
       color: #666;
-      margin-bottom: 24px;
+      margin-bottom: 12px;
     }
+    #filter-box {
+      width: 100%;
+      max-width: 420px;
+      margin-bottom: 12px;
+    }
+    #filter-input {
+      width: 100%;
+      background: #16162a;
+      border: 1px solid #2a2a4a;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 14px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    #filter-input:focus { border-color: #00d9ff; }
+    #filter-input::placeholder { color: #555; }
     #session-list {
       list-style: none;
       width: 100%;
       max-width: 420px;
+      padding-bottom: 24px;
     }
     #session-list li {
       display: flex;
@@ -87,18 +107,60 @@
       padding: 12px 16px;
       border: 1px solid #2a2a4a;
       border-radius: 6px;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
       cursor: pointer;
       transition: border-color .15s, background .15s;
     }
     #session-list li:hover { border-color: #00d9ff; background: rgba(0,217,255,.05); }
-    #session-list .name { font-weight: 600; color: #e0e0e0; }
-    #session-list .meta { font-size: 12px; color: #666; display: flex; gap: 12px; }
-    #session-list .attached { color: #4caf50; }
-    #session-list .detached { color: #666; }
+    #session-list li.active { border-color: #3a3a5a; background: rgba(0,217,255,.03); }
+    #session-list li.inactive { border-color: #222240; opacity: 0.7; }
+    #session-list .item-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    #session-list .icon { font-size: 14px; flex-shrink: 0; }
+    #session-list .name { font-weight: 600; color: #e0e0e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #session-list .badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
+    #session-list .badge-active { background: rgba(76,175,80,.15); color: #4caf50; }
+    #session-list .badge-project { background: rgba(0,217,255,.1); color: #00d9ff; }
     #picker .empty { color: #555; font-size: 14px; }
     #picker .error { color: #e74c3c; font-size: 13px; margin-top: 12px; }
     #picker .loading { color: #555; font-size: 14px; }
+
+    /* Tool picker modal */
+    #tool-modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.5);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    #tool-modal-overlay.visible { display: flex; }
+    #tool-modal {
+      background: #1a1a2e;
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      padding: 20px;
+      width: 90%;
+      max-width: 320px;
+    }
+    #tool-modal h3 { color: #00d9ff; font-size: 15px; margin-bottom: 14px; }
+    #tool-modal button {
+      display: block;
+      width: 100%;
+      background: #16162a;
+      border: 1px solid #2a2a4a;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 14px;
+      padding: 10px 14px;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      text-align: left;
+      transition: border-color .15s, background .15s;
+    }
+    #tool-modal button:hover { border-color: #00d9ff; background: rgba(0,217,255,.05); }
+    #tool-modal .cancel { color: #666; text-align: center; margin-top: 4px; margin-bottom: 0; }
   </style>
 </head>
 <body>
@@ -111,14 +173,26 @@
   </div>
 
   <div id="picker">
-    <h1>tmux sessions</h1>
-    <p class="subtitle">select a session to connect</p>
+    <h1>⚡ vaibhav</h1>
+    <p class="subtitle">select a session or start a project</p>
+    <div id="filter-box">
+      <input id="filter-input" type="text" placeholder="filter..." autocomplete="off" />
+    </div>
     <ul id="session-list"><li class="loading">loading…</li></ul>
   </div>
 
-  <!-- Mobile console for debugging -->
-  <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-  <script>eruda.init();</script>
+  <div id="tool-modal-overlay" onclick="if(event.target===this)closeToolModal()">
+    <div id="tool-modal">
+      <h3 id="tool-modal-title"></h3>
+      <button onclick="openWithTool('amp')">⚡ Amp</button>
+      <button onclick="openWithTool('claude')">🤖 Claude Code</button>
+      <button onclick="openWithTool('pi')">🥧 pi</button>
+      <button onclick="openWithTool('opencode')">📝 OpenCode</button>
+      <button onclick="openWithTool('codex')">🧬 Codex</button>
+      <button onclick="openWithTool('')">🐚 Shell only</button>
+      <button class="cancel" onclick="closeToolModal()">cancel</button>
+    </div>
+  </div>
 
   <script type="module">
     import { init, Terminal, FitAddon } from '/ghostty/ghostty-web.js';
@@ -144,6 +218,12 @@
     const $topBar = document.getElementById('top-bar');
     const $barName = document.getElementById('bar-session-name');
     const $list = document.getElementById('session-list');
+    const $filter = document.getElementById('filter-input');
+    const $toolOverlay = document.getElementById('tool-modal-overlay');
+    const $toolTitle = document.getElementById('tool-modal-title');
+
+    let statusData = null; // cached /api/status response
+    let toolPickerProject = null;
 
     window.showPicker = async function showPicker() {
       disconnect();
@@ -151,7 +231,8 @@
       $terminal.classList.remove('visible');
       $picker.classList.remove('hidden');
       document.getElementById('app-wrapper').style.height = '0';
-      await loadSessions();
+      $filter.value = '';
+      await loadStatus();
     };
 
     function showTerminal(sessionName) {
@@ -161,32 +242,147 @@
       $barName.textContent = sessionName;
     }
 
-    // --- Fetch sessions ---
-    async function loadSessions() {
+    // --- Fuzzy search (matches Android app) ---
+    function fuzzyMatch(target, query) {
+      const t = target.toLowerCase(), q = query.toLowerCase();
+      let ti = 0;
+      for (const qc of q) {
+        const found = t.indexOf(qc, ti);
+        if (found < 0) return false;
+        ti = found + 1;
+      }
+      return true;
+    }
+
+    function fuzzyScore(target, query) {
+      const t = target.toLowerCase(), q = query.toLowerCase();
+      let score = 0, ti = 0, prevMatch = -2;
+      for (const qc of q) {
+        const found = t.indexOf(qc, ti);
+        if (found < 0) return 0;
+        score += 10;
+        if (found === prevMatch + 1) score += 5;
+        if (found === 0) score += 3;
+        prevMatch = found;
+        ti = found + 1;
+      }
+      return score - t.length;
+    }
+
+    // --- Fetch status & render ---
+    async function loadStatus() {
       $list.innerHTML = '<li class="loading">loading…</li>';
       try {
-        const res = await fetch('/api/tmux-sessions');
-        const data = await res.json();
-        if (!data.ok || !data.sessions.length) {
-          $list.innerHTML = '<li class="empty">no tmux sessions found</li>';
-          return;
-        }
-        $list.innerHTML = '';
-        for (const s of data.sessions) {
-          const li = document.createElement('li');
-          li.innerHTML = `
-            <span class="name">${esc(s.name)}</span>
-            <span class="meta">
-              <span>${s.windows} win${s.windows !== 1 ? 's' : ''}</span>
-              <span class="${s.attached ? 'attached' : 'detached'}">${s.attached ? 'attached' : 'detached'}</span>
-            </span>`;
-          li.onclick = () => connectSession(s.name);
-          $list.appendChild(li);
-        }
+        const res = await fetch('/api/status');
+        statusData = await res.json();
+        renderList();
       } catch (e) {
-        $list.innerHTML = `<li class="empty">failed to load sessions</li><p class="error">${esc(e.message)}</p>`;
+        $list.innerHTML = `<li class="empty">failed to load</li><p class="error">${esc(e.message)}</p>`;
       }
     }
+
+    function buildItems() {
+      if (!statusData) return [];
+      const projects = statusData.projects || [];
+      const sessions = statusData.sessions || [];
+      const projectNames = new Set(projects.map(p => p.name));
+      const items = [];
+
+      // Active projects first
+      for (const p of projects) {
+        if (p.active) items.push({ name: p.name, active: true, isProject: true });
+      }
+      // Active sessions not in projects
+      for (const s of sessions) {
+        if (!projectNames.has(s)) items.push({ name: s, active: true, isProject: false });
+      }
+      // Inactive projects
+      for (const p of projects) {
+        if (!p.active) items.push({ name: p.name, active: false, isProject: true });
+      }
+      return items;
+    }
+
+    function renderList() {
+      const filter = $filter.value.trim();
+      let items = buildItems();
+
+      if (filter) {
+        items = items.filter(i => fuzzyMatch(i.name, filter))
+                     .sort((a, b) => fuzzyScore(b.name, filter) - fuzzyScore(a.name, filter));
+      }
+
+      if (!items.length) {
+        $list.innerHTML = filter
+          ? `<li class="empty">no matches for "${esc(filter)}"</li>`
+          : '<li class="empty">no projects or sessions found</li>';
+        return;
+      }
+
+      $list.innerHTML = '';
+      for (const item of items) {
+        const li = document.createElement('li');
+        li.className = item.active ? 'active' : 'inactive';
+        const icon = item.active ? '🖥️' : '▶️';
+        const badge = item.active
+          ? '<span class="badge badge-active">active</span>'
+          : (item.isProject ? '<span class="badge badge-project">project</span>' : '');
+        li.innerHTML = `
+          <span class="item-left">
+            <span class="icon">${icon}</span>
+            <span class="name">${esc(item.name)}</span>
+          </span>
+          ${badge}`;
+        li.onclick = () => handleItemClick(item);
+        $list.appendChild(li);
+      }
+    }
+
+    function handleItemClick(item) {
+      if (item.active) {
+        // Active session/project — connect directly
+        connectSession(item.name);
+      } else {
+        // Inactive project — show tool picker
+        toolPickerProject = item.name;
+        $toolTitle.textContent = item.name;
+        $toolOverlay.classList.add('visible');
+      }
+    }
+
+    window.closeToolModal = function() {
+      $toolOverlay.classList.remove('visible');
+      toolPickerProject = null;
+    };
+
+    window.openWithTool = async function(tool) {
+      const project = toolPickerProject;
+      if (!project) return;
+      closeToolModal();
+
+      $list.innerHTML = `<li class="loading">starting ${esc(project)}${tool ? ' + ' + esc(tool) : ''}…</li>`;
+
+      try {
+        const res = await fetch('/api/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project, tool }),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          $list.innerHTML = `<li class="empty">failed to open ${esc(project)}</li><p class="error">${esc(data.error || 'unknown error')}</p>`;
+          return;
+        }
+        connectSession(project);
+      } catch (e) {
+        $list.innerHTML = `<li class="empty">error opening project</li><p class="error">${esc(e.message)}</p>`;
+      }
+    };
+
+    // Filter input handler
+    $filter.addEventListener('input', () => {
+      if (statusData) renderList();
+    });
 
     function esc(s) {
       const d = document.createElement('div');
@@ -435,7 +631,7 @@
     if (urlSession) {
       connectSession(urlSession);
     } else {
-      loadSessions();
+      loadStatus();
     }
   </script>
 </body>
