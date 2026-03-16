@@ -52,6 +52,7 @@
     }
     #terminal.visible { display: block; }
     #terminal canvas { display: block; }
+    #terminal textarea { pointer-events: none !important; }
 
     /* Session picker */
     #picker {
@@ -292,48 +293,91 @@
           }
         });
 
-        // Touch scroll bridge: send raw mouse wheel bytes to PTY
-        // node-pty passes these through to tmux which has mouse mode enabled
+        // --- Touch handling: scroll, tap-to-click, and keyboard focus ---
+        // textarea has pointer-events:none so taps reach the canvas/container.
+        // We handle taps here to send mouse clicks to tmux and focus textarea
+        // for keyboard input.
+
         let touchStartY = null;
+        let touchStartX = null;
+        let touchMoved = false;
         let lastScrollTime = 0;
         const scrollThreshold = 20;
+        const tapThreshold = 10; // max movement to count as a tap
+
+        function getCellCoords(clientX, clientY) {
+          const canvas = $terminal.querySelector('canvas');
+          if (!canvas) return null;
+          const rect = canvas.getBoundingClientRect();
+          const x = clientX - rect.left;
+          const y = clientY - rect.top;
+          const cellW = rect.width / term.cols;
+          const cellH = rect.height / term.rows;
+          return {
+            col: Math.floor(x / cellW) + 1,
+            row: Math.floor(y / cellH) + 1,
+          };
+        }
+
+        function sendMouseClick(col, row) {
+          if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          // SGR mouse mode: press then release left button (button 0)
+          ws.send(`\x1b[<0;${col};${row}M`);
+          ws.send(`\x1b[<0;${col};${row}m`);
+        }
 
         function sendScroll(up) {
           if (!ws || ws.readyState !== WebSocket.OPEN) return;
           ws.send(up ? '\x1b[A' : '\x1b[B');
         }
 
-        // Touch scroll on the terminal container (survives canvas re-renders)
         $terminal.addEventListener('touchstart', (e) => {
           if (e.touches.length === 1) {
             touchStartY = e.touches[0].clientY;
+            touchStartX = e.touches[0].clientX;
+            touchMoved = false;
           }
         }, { passive: true });
 
         $terminal.addEventListener('touchmove', (e) => {
           if (touchStartY === null || e.touches.length !== 1) return;
-          e.preventDefault();
 
           const touch = e.touches[0];
+          const dx = Math.abs(touch.clientX - touchStartX);
+          const dy = Math.abs(touch.clientY - touchStartY);
+
+          if (dx > tapThreshold || dy > tapThreshold) {
+            touchMoved = true;
+          }
+
+          e.preventDefault();
           const deltaY = touchStartY - touch.clientY;
           const now = Date.now();
 
           if (Math.abs(deltaY) >= scrollThreshold && now - lastScrollTime > 30) {
             const lines = Math.max(1, Math.floor(Math.abs(deltaY) / scrollThreshold));
-            // Natural scrolling: swipe up (deltaY>0) = scroll DOWN, swipe down = scroll UP
             const up = deltaY < 0;
-
             for (let i = 0; i < lines; i++) {
               sendScroll(up);
             }
-
             touchStartY = touch.clientY;
             lastScrollTime = now;
           }
         }, { passive: false });
 
-        $terminal.addEventListener('touchend', () => {
+        $terminal.addEventListener('touchend', (e) => {
+          // If it was a tap (not a scroll), send mouse click to tmux
+          if (!touchMoved && touchStartX !== null) {
+            const coords = getCellCoords(touchStartX, touchStartY);
+            if (coords) {
+              sendMouseClick(coords.col, coords.row);
+            }
+          }
           touchStartY = null;
+          touchStartX = null;
+          touchMoved = false;
+          // Always keep textarea focused for keyboard input
+          textarea.focus();
         }, { passive: true });
 
         // Also handle paste events directly
