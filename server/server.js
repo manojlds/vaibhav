@@ -17,7 +17,6 @@ const execFileAsync = promisify(execFile);
 const PORT = parseInt(process.env.PORT || "9090", 10);
 const HOST = process.env.HOST || "127.0.0.1";
 const SHARE_DIR = path.join(homedir(), "vaibhav-share");
-const VAIBHAV_BIN = path.join(homedir(), "bin", "vaibhav");
 const GHOSTTY_DIST = path.dirname(
   new URL(import.meta.resolve("ghostty-web")).pathname,
 );
@@ -66,51 +65,160 @@ await app.register(fastifyStatic, {
 });
 
 // --- Helpers ---
-function vaibhavEnv() {
+const PROJECTS_FILE = path.join(
+  process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config"),
+  "vaibhav",
+  "projects",
+);
+
+function tmuxEnv() {
   return {
     ...process.env,
     PATH: `${path.join(homedir(), "bin")}:${path.join(homedir(), ".cargo", "bin")}:${process.env.PATH}`,
   };
 }
 
-async function runVaibhav(args, timeout = 5000) {
-  const { stdout } = await execFileAsync(VAIBHAV_BIN, args, {
+async function tmuxExec(args, timeout = 5000) {
+  const { stdout } = await execFileAsync("tmux", args, {
     timeout,
-    env: vaibhavEnv(),
+    env: tmuxEnv(),
   });
   return stdout;
 }
 
-// --- API routes (match existing Python server) ---
+async function loadProjects() {
+  try {
+    const content = await fs.readFile(PROJECTS_FILE, "utf8");
+    return content
+      .split("\n")
+      .filter((l) => l.trim() && !l.startsWith("#"))
+      .map((l) => {
+        const eq = l.indexOf("=");
+        return { name: l.slice(0, eq), path: l.slice(eq + 1) };
+      });
+  } catch {
+    return [];
+  }
+}
+
+async function activeTmuxSessions() {
+  try {
+    const out = await tmuxExec([
+      "list-sessions",
+      "-F",
+      "#{session_name}",
+    ]);
+    return out.trim().split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// --- API routes (tmux-native) ---
 app.get("/api/status", async () => {
-  const out = await runVaibhav(["api"]);
-  return JSON.parse(out || '{"ok":false,"error":"empty response"}');
+  const [projects, sessions] = await Promise.all([
+    loadProjects(),
+    activeTmuxSessions(),
+  ]);
+  const activeSet = new Set(sessions);
+  return {
+    projects: projects.map((p) => ({
+      ...p,
+      active: activeSet.has(p.name),
+    })),
+    sessions,
+  };
 });
 
 app.post("/api/kill", async (req) => {
   const { session = "" } = req.body || {};
-  const out = await runVaibhav(["api", "kill", session]);
-  return JSON.parse(out || '{"ok":false,"error":"empty response"}');
+  if (!session) return { ok: false, error: "session name required" };
+  try {
+    await tmuxExec(["kill-session", "-t", session]);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 app.post("/api/open", async (req) => {
   const { project = "", tool = "" } = req.body || {};
-  const args = ["api", "open", project];
-  if (tool) args.push(tool);
-  const out = await runVaibhav(args, 25000);
-  return JSON.parse(out || '{"ok":false,"error":"empty response"}');
-});
+  if (!project) return { ok: false, error: "project name required" };
 
-app.post("/api/active-tab", async (req) => {
-  const { session = "" } = req.body || {};
-  const out = await runVaibhav(["api", "active-tab", session], 8000);
-  return JSON.parse(out || '{"ok":false,"error":"empty response"}');
-});
+  const projects = await loadProjects();
+  const proj = projects.find((p) => p.name === project);
+  if (!proj) return { ok: false, error: `project not found: ${project}` };
 
-app.post("/api/focus-tab", async (req) => {
-  const { session = "", tab = "" } = req.body || {};
-  const out = await runVaibhav(["api", "focus-tab", session, tab], 12000);
-  return JSON.parse(out || '{"ok":false,"error":"empty response"}');
+  const sessions = await activeTmuxSessions();
+  const exists = sessions.includes(project);
+
+  try {
+    if (exists) {
+      // Session exists — add tool window if requested
+      if (tool) {
+        const winOut = await tmuxExec([
+          "list-windows",
+          "-t",
+          project,
+          "-F",
+          "#{window_name}",
+        ]);
+        const windows = winOut.trim().split("\n").filter(Boolean);
+        if (!windows.includes(tool)) {
+          await tmuxExec([
+            "new-window",
+            "-t",
+            project,
+            "-n",
+            tool,
+            "-c",
+            proj.path,
+            tool,
+          ]);
+        }
+        await tmuxExec(["select-window", "-t", `${project}:${tool}`]);
+      }
+    } else {
+      // Create new session
+      if (tool) {
+        await tmuxExec([
+          "new-session",
+          "-d",
+          "-s",
+          project,
+          "-c",
+          proj.path,
+          "-n",
+          tool,
+          tool,
+        ]);
+        await tmuxExec([
+          "new-window",
+          "-t",
+          project,
+          "-n",
+          "shell",
+          "-c",
+          proj.path,
+        ]);
+        await tmuxExec(["select-window", "-t", `${project}:${tool}`]);
+      } else {
+        await tmuxExec([
+          "new-session",
+          "-d",
+          "-s",
+          project,
+          "-c",
+          proj.path,
+          "-n",
+          "shell",
+        ]);
+      }
+    }
+    return { ok: true, session: project };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // --- Upload ---
