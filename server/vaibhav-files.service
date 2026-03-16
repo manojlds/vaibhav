@@ -1,0 +1,17 @@
+[Unit]
+Description=Vaibhav File Sharing Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/vaibhav/server
+ExecStart=%h/.nvm/versions/node/v24.14.0/bin/node server.js
+ExecStartPost=-/bin/sh -c '/usr/bin/tailscale serve --bg --yes --https 9443 http://127.0.0.1:9090 &'
+ExecStopPost=-/usr/bin/tailscale serve --https 9443 off
+Environment=PORT=9090
+Environment=HOST=127.0.0.1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
