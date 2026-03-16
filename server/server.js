@@ -1,0 +1,267 @@
+import { execFile } from "node:child_process";
+import { createReadStream } from "node:fs";
+import fs from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+
+import Fastify from "fastify";
+import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
+import fastifyStatic from "@fastify/static";
+import * as pty from "@lydell/node-pty";
+import { WebSocketServer } from "ws";
+
+const execFileAsync = promisify(execFile);
+
+const PORT = parseInt(process.env.PORT || "9090", 10);
+const HOST = process.env.HOST || "127.0.0.1";
+const SHARE_DIR = path.join(homedir(), "vaibhav-share");
+const VAIBHAV_BIN = path.join(homedir(), "bin", "vaibhav");
+const GHOSTTY_DIST = path.dirname(
+  new URL(import.meta.resolve("ghostty-web")).pathname,
+);
+
+// Ensure share directory exists
+await fs.mkdir(SHARE_DIR, { recursive: true });
+
+// --- Fastify setup ---
+const app = Fastify({ logger: false });
+await app.register(cors, { origin: true });
+await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } });
+
+// Serve ghostty-web assets (JS + WASM) at /ghostty/
+await app.register(fastifyStatic, {
+  root: GHOSTTY_DIST,
+  prefix: "/ghostty/",
+  decorateReply: false,
+});
+
+// Serve shared files at /files/
+await app.register(fastifyStatic, {
+  root: SHARE_DIR,
+  prefix: "/files/",
+  decorateReply: false,
+});
+
+// Serve public UI (decorateReply: true for sendFile support)
+await app.register(fastifyStatic, {
+  root: path.join(import.meta.dirname, "public"),
+  prefix: "/",
+});
+
+// --- Helpers ---
+function vaibhavEnv() {
+  return {
+    ...process.env,
+    PATH: `${path.join(homedir(), "bin")}:${path.join(homedir(), ".cargo", "bin")}:${process.env.PATH}`,
+  };
+}
+
+async function runVaibhav(args, timeout = 5000) {
+  const { stdout } = await execFileAsync(VAIBHAV_BIN, args, {
+    timeout,
+    env: vaibhavEnv(),
+  });
+  return stdout;
+}
+
+// --- API routes (match existing Python server) ---
+app.get("/api/status", async () => {
+  const out = await runVaibhav(["api"]);
+  return JSON.parse(out || '{"ok":false,"error":"empty response"}');
+});
+
+app.post("/api/kill", async (req) => {
+  const { session = "" } = req.body || {};
+  const out = await runVaibhav(["api", "kill", session]);
+  return JSON.parse(out || '{"ok":false,"error":"empty response"}');
+});
+
+app.post("/api/open", async (req) => {
+  const { project = "", tool = "" } = req.body || {};
+  const args = ["api", "open", project];
+  if (tool) args.push(tool);
+  const out = await runVaibhav(args, 25000);
+  return JSON.parse(out || '{"ok":false,"error":"empty response"}');
+});
+
+app.post("/api/active-tab", async (req) => {
+  const { session = "" } = req.body || {};
+  const out = await runVaibhav(["api", "active-tab", session], 8000);
+  return JSON.parse(out || '{"ok":false,"error":"empty response"}');
+});
+
+app.post("/api/focus-tab", async (req) => {
+  const { session = "", tab = "" } = req.body || {};
+  const out = await runVaibhav(["api", "focus-tab", session, tab], 12000);
+  return JSON.parse(out || '{"ok":false,"error":"empty response"}');
+});
+
+// --- Upload ---
+app.post("/api/upload", async (req, reply) => {
+  const data = await req.file();
+  if (!data) {
+    return reply.code(400).send({ ok: false, error: "No file provided" });
+  }
+
+  const subdir = (data.fields.subdir?.value || "")
+    .replace(/\.\./g, "")
+    .replace(/^\/+|\/+$/g, "");
+  const original = path.basename(data.filename);
+  const now = new Date();
+  const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+  const filename = `${stamp}_${original}`;
+
+  const destDir = subdir
+    ? path.join(SHARE_DIR, subdir)
+    : SHARE_DIR;
+  await fs.mkdir(destDir, { recursive: true });
+  const destPath = path.join(destDir, filename);
+
+  const chunks = [];
+  for await (const chunk of data.file) {
+    chunks.push(chunk);
+  }
+  await fs.writeFile(destPath, Buffer.concat(chunks));
+
+  const relPath = subdir ? `${subdir}/${filename}` : filename;
+  return {
+    ok: true,
+    filename,
+    path: destPath,
+    url: `/files/${relPath}`,
+  };
+});
+
+// --- Clean URL routes ---
+app.get("/terminal", async (req, reply) => {
+  return reply.sendFile("terminal.html");
+});
+
+app.get("/upload", async (req, reply) => {
+  return reply.sendFile("upload.html");
+});
+
+// --- tmux session list for terminal picker ---
+app.get("/api/tmux-sessions", async () => {
+  try {
+    const { stdout } = await execFileAsync("tmux", [
+      "list-sessions",
+      "-F",
+      "#{session_name}:#{session_windows}:#{session_attached}",
+    ], { timeout: 3000, env: vaibhavEnv() });
+    const sessions = stdout
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [name, windows, attached] = line.split(":");
+        return { name, windows: parseInt(windows), attached: parseInt(attached) > 0 };
+      });
+    return { ok: true, sessions };
+  } catch {
+    return { ok: true, sessions: [] };
+  }
+});
+
+// --- WebSocket PTY for ghostty-web ---
+const wss = new WebSocketServer({ noServer: true });
+
+wss.on("connection", (ws, req) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const session = url.pathname.replace(/^\/ws\/?/, "").replace(/\/$/, "");
+  const cols = parseInt(url.searchParams.get("cols") || "120", 10);
+  const rows = parseInt(url.searchParams.get("rows") || "30", 10);
+
+  console.log(`[ws] connect session="${session}" cols=${cols} rows=${rows}`);
+
+  // Attach to tmux session, or spawn a plain shell if no session specified
+  let cmd, args;
+  if (session) {
+    cmd = "tmux";
+    args = ["attach-session", "-t", session];
+  } else {
+    cmd = process.env.SHELL || "/bin/bash";
+    args = [];
+  }
+
+  const ptyProcess = pty.spawn(cmd, args, {
+    name: "xterm-256color",
+    cols,
+    rows,
+    cwd: homedir(),
+    env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+  });
+
+  ptyProcess.onData((data) => {
+    if (ws.readyState === ws.OPEN) {
+      ws.send(data);
+    }
+  });
+
+  ptyProcess.onExit(({ exitCode, signal }) => {
+    console.log(`[ws] pty exit code=${exitCode} signal=${signal} session="${session}"`);
+    if (ws.readyState === ws.OPEN) {
+      ws.close(1000, `PTY exited with code ${exitCode}`);
+    }
+  });
+
+  // Keepalive ping every 30s to prevent proxy timeouts
+  const pingInterval = setInterval(() => {
+    if (ws.readyState === ws.OPEN) {
+      ws.ping();
+    }
+  }, 30000);
+
+  ws.on("message", (msg, isBinary) => {
+    if (isBinary) {
+      // Binary messages (e.g. mouse wheel sequences) - write raw bytes
+      ptyProcess.write(Buffer.from(msg));
+      return;
+    }
+    const str = msg.toString("utf8");
+    // Resize messages are JSON
+    if (str.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(str);
+        if (parsed.type === "resize") {
+          ptyProcess.resize(parsed.cols, parsed.rows);
+          return;
+        }
+      } catch {
+        // not JSON, treat as input
+      }
+    }
+    ptyProcess.write(str);
+  });
+
+  ws.on("close", (code, reason) => {
+    console.log(`[ws] close code=${code} reason="${reason}" session="${session}"`);
+    clearInterval(pingInterval);
+    ptyProcess.kill();
+  });
+
+  ws.on("error", (err) => {
+    console.error(`[ws] error session="${session}":`, err.message);
+  });
+});
+
+// Wire up WebSocket upgrade on the raw Node server
+app.server.on("upgrade", (req, socket, head) => {
+  if (req.url?.startsWith("/ws")) {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+// --- Start ---
+await app.listen({ port: PORT, host: HOST });
+console.log(`Vaibhav server on ${HOST}:${PORT}`);
+console.log(`  Terminal: /terminal`);
+console.log(`  Upload:   /upload`);
+console.log(`  Files:    /files/`);
+console.log(`  API:      /api/status`);
