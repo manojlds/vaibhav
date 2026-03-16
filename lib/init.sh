@@ -9,9 +9,6 @@ init_config() {
     local current_desktop_host="${VAIBHAV_DESKTOP_HOST:-}"
     local current_ssh_host="${VAIBHAV_SSH_HOST:-desktop}"
     local current_mosh_no_init="${VAIBHAV_MOSH_NO_INIT:-true}"
-    local current_multiplexer
-    current_multiplexer=$(normalize_multiplexer_preference "${VAIBHAV_MULTIPLEXER:-auto}")
-
     # Projects directory
     local default_projects_dir="${current_projects_dir:-$HOME/projects}"
     read -rp "Projects directory [${default_projects_dir}]: " input_projects_dir
@@ -34,12 +31,6 @@ init_config() {
         use_mosh="true"
     fi
 
-    # Multiplexer backend
-    local default_multiplexer="${current_multiplexer}"
-    read -rp "Session multiplexer [${default_multiplexer}] (tmux/zellij/auto): " input_multiplexer
-    local multiplexer
-    multiplexer=$(normalize_multiplexer_preference "${input_multiplexer:-$default_multiplexer}")
-
     # Write config
     mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_FILE" << EOF
@@ -49,7 +40,7 @@ VAIBHAV_DESKTOP_HOST="${desktop_host}"
 VAIBHAV_SSH_HOST="${ssh_host}"
 VAIBHAV_USE_MOSH="${use_mosh}"
 VAIBHAV_MOSH_NO_INIT="${current_mosh_no_init}"
-VAIBHAV_MULTIPLEXER="${multiplexer}"
+VAIBHAV_MULTIPLEXER="tmux"
 EOF
 
     echo ""

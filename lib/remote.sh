@@ -52,13 +52,6 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && ! vaibhav_is_current_host_desktop; then
     set -- "${args[@]+"${args[@]}"}"
 
     forwarded_args="$*"
-    if [[ -n "$VAIBHAV_MUX_OVERRIDE" ]]; then
-        if [[ -n "$forwarded_args" ]]; then
-            forwarded_args="--mux ${VAIBHAV_MUX_OVERRIDE} ${forwarded_args}"
-        else
-            forwarded_args="--mux ${VAIBHAV_MUX_OVERRIDE}"
-        fi
-    fi
 
     case "${1:-}" in
         init|update|setup|doctor|refresh)

@@ -141,7 +141,7 @@ class VaibhavHandler(http.server.SimpleHTTPRequestHandler):
         elif parsed.path == '/api/open':
             project = body.get('project', '')
             tool = body.get('tool', '')
-            # Allow extra time for zellij session/tab readiness on mobile startup.
+            # Allow extra time for session readiness on mobile startup.
             if tool:
                 self._run_api('api', 'open', project, tool, timeout=25)
             else:

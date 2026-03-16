@@ -79,29 +79,9 @@ opencode_web_local_url() {
     printf 'http://127.0.0.1:%s\n' "$port"
 }
 
-zellij_web_local_url() {
-    local service_file="$HOME/.config/systemd/user/zellij-web.service"
-    local port
-    port=$(parse_service_port_from_unit "$service_file" "8082")
-    printf 'http://127.0.0.1:%s\n' "$port"
-}
-
 opencode_web_effective_url() {
     local local_url
     local_url=$(opencode_web_local_url)
-    local ts_url
-    ts_url=$(get_tailscale_serve_url_for_proxy "$local_url")
-
-    if [[ -n "$ts_url" ]]; then
-        printf '%s\n' "$ts_url"
-    else
-        printf '%s\n' "$local_url"
-    fi
-}
-
-zellij_web_effective_url() {
-    local local_url
-    local_url=$(zellij_web_local_url)
     local ts_url
     ts_url=$(get_tailscale_serve_url_for_proxy "$local_url")
 
@@ -176,54 +156,6 @@ print_opencode_web_status() {
     echo ""
 }
 
-print_zellij_web_status() {
-    local service_name="zellij-web"
-    local service_file="$HOME/.config/systemd/user/zellij-web.service"
-    local local_url
-    local_url=$(zellij_web_local_url)
-    local ts_url
-    ts_url=$(get_tailscale_serve_url_for_proxy "$local_url")
-
-    echo -e "${BOLD}Zellij Web${NC}"
-    echo ""
-
-    if [[ -f "$service_file" ]]; then
-        if systemctl --user is-active --quiet "$service_name" 2>/dev/null; then
-            echo -e "  Service:  ${GREEN}running${NC}"
-            if command -v zellij &>/dev/null; then
-                local web_status
-                web_status=$(zellij web --status 2>/dev/null || true)
-                if echo "$web_status" | grep -qi 'online'; then
-                    echo -e "  Health:   ${GREEN}healthy${NC}"
-                else
-                    echo -e "  Health:   ${RED}unreachable${NC}"
-                fi
-            else
-                echo -e "  Health:   ${YELLOW}unknown${NC} ${DIM}(zellij binary not found)${NC}"
-            fi
-        else
-            echo -e "  Service:  ${RED}stopped${NC}"
-            echo -e "  ${DIM}Start with: vaibhav web zellij start${NC}"
-        fi
-    else
-        echo -e "  Service:  ${DIM}not configured${NC}"
-        echo -e "  ${DIM}Set up via: ./setup-desktop.sh${NC}"
-    fi
-
-    echo -e "  Local:    ${CYAN}${local_url}${NC}"
-    if [[ -n "$ts_url" ]]; then
-        echo -e "  Tailscale:${BOLD} ${ts_url}${NC}"
-    else
-        echo -e "  Tailscale:${DIM} not configured${NC}"
-    fi
-
-    if command -v zellij &>/dev/null; then
-        echo -e "  Token:    ${DIM}create with: vaibhav web zellij token${NC}"
-    fi
-
-    echo ""
-}
-
 print_files_status() {
     local service_name="vaibhav-files"
     local service_file="$HOME/.config/systemd/user/vaibhav-files.service"
@@ -273,18 +205,15 @@ show_web_usage() {
     echo -e "${BOLD}vaibhav web${NC}"
     echo ""
     echo "Usage:"
-    echo "  vaibhav web                         Show OpenCode + Zellij web status"
+    echo "  vaibhav web                         Show OpenCode web status"
     echo "  vaibhav web opencode               Show OpenCode Web status"
-    echo "  vaibhav web zellij               Show Zellij Web status"
     echo "  vaibhav web <service> <action>    Manage service"
     echo ""
-    echo "Services: opencode | zellij | files"
+    echo "Services: opencode | files"
     echo "Actions:  status | start | stop | restart"
-    echo "          zellij also supports: token | tokens"
     echo ""
     echo "Flags:"
     echo "  --url-only            Print OpenCode Web URL only"
-    echo "  --zellij-url-only     Print Zellij Web URL only"
     echo "  --files-url-only      Print Vaibhav Files URL only"
 }
 
@@ -297,29 +226,6 @@ web_service_control() {
             local op_service_file="$HOME/.config/systemd/user/opencode-web.service"
             if [[ ! -f "$op_service_file" ]]; then
                 echo -e "${YELLOW}Warning:${NC} OpenCode Web service is not configured. Run ./setup-desktop.sh"
-                return 1
-            fi
-            ;;
-        zellij)
-            local zj_service_file="$HOME/.config/systemd/user/zellij-web.service"
-            if [[ "$action" == "token" ]]; then
-                if ! command -v zellij &>/dev/null; then
-                    echo -e "${RED}Error:${NC} zellij not found"
-                    return 1
-                fi
-                zellij web --create-token
-                return 0
-            fi
-            if [[ "$action" == "tokens" ]]; then
-                if ! command -v zellij &>/dev/null; then
-                    echo -e "${RED}Error:${NC} zellij not found"
-                    return 1
-                fi
-                zellij web --list-tokens
-                return 0
-            fi
-            if [[ ! -f "$zj_service_file" ]]; then
-                echo -e "${YELLOW}Warning:${NC} Zellij Web service is not configured. Run ./setup-desktop.sh"
                 return 1
             fi
             ;;
@@ -355,7 +261,6 @@ show_web_status() {
     local target=""
     local action="status"
     local url_only=false
-    local zellij_url_only=false
     local files_url_only=false
 
     while [[ $# -gt 0 ]]; do
@@ -363,16 +268,13 @@ show_web_status() {
             --url-only)
                 url_only=true
                 ;;
-            --zellij-url-only)
-                zellij_url_only=true
-                ;;
             --files-url-only)
                 files_url_only=true
                 ;;
-            opencode|zellij|files)
+            opencode|files)
                 target="$1"
                 ;;
-            status|start|stop|restart|token|tokens)
+            status|start|stop|restart)
                 action="$1"
                 ;;
             help|-h|--help)
@@ -388,20 +290,13 @@ show_web_status() {
         shift
     done
 
-    if [[ "$zellij_url_only" == "true" ]]; then
-        echo "$(zellij_web_effective_url)"
-        return 0
-    fi
-
     if [[ "$files_url_only" == "true" ]]; then
         echo "$(files_effective_url)"
         return 0
     fi
 
     if [[ "$url_only" == "true" ]]; then
-        if [[ "$target" == "zellij" ]]; then
-            echo "$(zellij_web_effective_url)"
-        elif [[ "$target" == "files" ]]; then
+        if [[ "$target" == "files" ]]; then
             echo "$(files_effective_url)"
         else
             echo "$(opencode_web_effective_url)"
@@ -411,7 +306,7 @@ show_web_status() {
 
     if [[ "$action" != "status" ]]; then
         if [[ -z "$target" ]]; then
-            echo -e "${RED}Error:${NC} Specify a service (opencode|zellij|files) for action '${action}'"
+            echo -e "${RED}Error:${NC} Specify a service (opencode|files) for action '${action}'"
             show_web_usage
             return 1
         fi
@@ -423,15 +318,11 @@ show_web_status() {
         opencode)
             print_opencode_web_status
             ;;
-        zellij)
-            print_zellij_web_status
-            ;;
         files)
             print_files_status
             ;;
         "")
             print_opencode_web_status
-            print_zellij_web_status
             print_files_status
             ;;
         *)
@@ -728,467 +619,4 @@ share_files() {
     local rel_path="${subdir:+$subdir/}$filename"
 
     echo -e "${GREEN}✓${NC} Shared: ${CYAN}${url}/${rel_path}${NC}"
-}
-
-api_status() {
-    local projects_file="${PROJECTS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav/projects}"
-    local zellij_bin="${VAIBHAV_ZELLIJ_BIN:-$(command -v zellij 2>/dev/null || true)}"
-
-    # Get active zellij sessions
-    local active_sessions=""
-    if [[ -n "$zellij_bin" ]]; then
-        active_sessions=$("$zellij_bin" list-sessions --no-formatting 2>/dev/null | awk '
-            /^[[:space:]]*$/ { next }
-            /No active sessions/ { next }
-            /\(EXITED/ { next }
-            { print $1 }
-        ' || true)
-    fi
-
-    # Build JSON
-    printf '{"projects":['
-    local first=true
-    if [[ -f "$projects_file" ]]; then
-        while IFS='=' read -r name path; do
-            [[ -z "$name" || "$name" == \#* ]] && continue
-            local active=false
-            if [[ -n "$active_sessions" ]] && echo "$active_sessions" | grep -qx "$name" 2>/dev/null; then
-                active=true
-            fi
-            if [[ "$first" == "true" ]]; then
-                first=false
-            else
-                printf ','
-            fi
-            printf '{"name":"%s","path":"%s","active":%s}' "$name" "$path" "$active"
-        done < "$projects_file"
-    fi
-    printf '],"sessions":['
-
-    # List all active zellij sessions (including non-project ones)
-    first=true
-    if [[ -n "$active_sessions" ]]; then
-        while IFS= read -r sess; do
-            [[ -z "$sess" ]] && continue
-            if [[ "$first" == "true" ]]; then
-                first=false
-            else
-                printf ','
-            fi
-            printf '"%s"' "$sess"
-        done <<< "$active_sessions"
-    fi
-    printf ']}\n'
-}
-
-api_kill_session() {
-    local session_name="$1"
-    local zellij_bin="${VAIBHAV_ZELLIJ_BIN:-$(command -v zellij 2>/dev/null || true)}"
-
-    if [[ -z "$session_name" ]]; then
-        printf '{"ok":false,"error":"session name required"}\n'
-        return 1
-    fi
-
-    if [[ -z "$zellij_bin" ]]; then
-        printf '{"ok":false,"error":"zellij not found"}\n'
-        return 1
-    fi
-
-    # kill active session (if running), then delete persisted snapshot/layout so stale tabs
-    # do not resurrect on next open.
-    "$zellij_bin" kill-session "$session_name" >/dev/null 2>&1 || true
-    "$zellij_bin" delete-session "$session_name" >/dev/null 2>&1 || true
-
-    # verify it's gone from active list
-    if "$zellij_bin" list-sessions --no-formatting 2>/dev/null | awk '{print $1}' | grep -Fqx "$session_name"; then
-        printf '{"ok":false,"error":"failed to remove session %s"}\n' "$session_name"
-        return 1
-    fi
-
-    printf '{"ok":true}\n'
-}
-
-api_open_project() {
-    local project_name="$1"
-    local tool="${2:-}"
-    local zellij_bin="${VAIBHAV_ZELLIJ_BIN:-$(command -v zellij 2>/dev/null || true)}"
-    local projects_file="${PROJECTS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav/projects}"
-
-    if [[ -z "$project_name" ]]; then
-        printf '{"ok":false,"error":"project name required"}\n'
-        return 1
-    fi
-
-    local project_path=""
-    if [[ -f "$projects_file" ]]; then
-        project_path=$(awk -F= -v name="$project_name" '
-            $1 == name {
-                print substr($0, index($0, "=") + 1)
-                exit
-            }
-        ' "$projects_file" 2>/dev/null || true)
-    fi
-
-    if [[ -z "$project_path" ]]; then
-        printf '{"ok":false,"error":"project not found: %s"}\n' "$project_name"
-        return 1
-    fi
-
-    if [[ -z "$zellij_bin" ]]; then
-        printf '{"ok":false,"error":"zellij not found"}\n'
-        return 1
-    fi
-
-    list_active_sessions() {
-        timeout 1 "$zellij_bin" list-sessions --no-formatting 2>/dev/null | awk '
-            /^[[:space:]]*$/ { next }
-            /No active sessions/ { next }
-            /\(EXITED/ { next }
-            { print $1 }
-        '
-    }
-
-    session_is_active() {
-        local active=""
-        active=$(list_active_sessions || true)
-        [[ -n "$active" ]] && echo "$active" | grep -Fqx "$project_name" 2>/dev/null
-    }
-
-    # Remove stale EXITED snapshot so old tabs/cwd do not resurrect.
-    # If session is active this is a harmless no-op.
-    "$zellij_bin" delete-session "$project_name" >/dev/null 2>&1 || true
-
-    # IMPORTANT: zellij-web must create/attach the session. Do NOT create it in headless API mode,
-    # otherwise web can fail with "cannot connect to this session".
-    local retries=0
-    local max_retries=12
-    while [[ $retries -lt $max_retries ]]; do
-        if session_is_active; then
-            break
-        fi
-        retries=$((retries + 1))
-        sleep 0.5
-    done
-
-    if ! session_is_active; then
-        if [[ -n "$tool" ]]; then
-            printf '{"ok":true,"session":"%s","tool_pending":true}\n' "$project_name"
-        else
-            printf '{"ok":true,"session":"%s","shell_pending":true}\n' "$project_name"
-        fi
-        return 0
-    fi
-
-    zj_client_count() {
-        timeout 1 "$zellij_bin" --session "$project_name" action list-clients 2>/dev/null |
-            awk 'NR > 1 && $1 ~ /^[0-9]+$/ { c++ } END { print c + 0 }'
-    }
-
-    local client_wait=0
-    local client_count=0
-    while [[ $client_wait -lt 8 ]]; do
-        client_count=$(zj_client_count || echo 0)
-        if [[ "$client_count" -gt 0 ]]; then
-            break
-        fi
-        client_wait=$((client_wait + 1))
-        sleep 0.5
-    done
-
-    if [[ "$client_count" -le 0 ]]; then
-        if [[ -n "$tool" ]]; then
-            printf '{"ok":true,"session":"%s","tool_pending":true}\n' "$project_name"
-        else
-            printf '{"ok":true,"session":"%s","shell_pending":true}\n' "$project_name"
-        fi
-        return 0
-    fi
-
-    local existing_tabs=""
-    existing_tabs=$(timeout 2 "$zellij_bin" --session "$project_name" action query-tab-names 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
-
-    focus_tab_retry() {
-        local tab_name="$1"
-        local i=0
-        while [[ $i -lt 6 ]]; do
-            if timeout 1 "$zellij_bin" --session "$project_name" action go-to-tab-name "$tab_name" >/dev/null 2>&1; then
-                return 0
-            fi
-            i=$((i + 1))
-            sleep 0.2
-        done
-        return 1
-    }
-
-    write_chars_retry() {
-        local chars="$1"
-        local i=0
-        while [[ $i -lt 8 ]]; do
-            if timeout 1 "$zellij_bin" --session "$project_name" action write-chars "$chars" >/dev/null 2>&1; then
-                return 0
-            fi
-            i=$((i + 1))
-            sleep 0.2
-        done
-        return 1
-    }
-
-    press_enter_retry() {
-        local i=0
-        while [[ $i -lt 8 ]]; do
-            if timeout 1 "$zellij_bin" --session "$project_name" action write 10 >/dev/null 2>&1; then
-                return 0
-            fi
-            i=$((i + 1))
-            sleep 0.2
-        done
-        return 1
-    }
-
-    local escaped_path=""
-    escaped_path=$(printf '%s' "$project_path" | sed "s/'/'\"'\"'/g")
-
-    # Always try to anchor current visible pane to project cwd (helps Tab #1 case).
-    # Also normalize erase char and readline bindings so mobile DEL/backspace works in bare shells.
-    local cwd_applied=false
-    local init_cmd="stty sane >/dev/null 2>&1 || true; stty erase '^?' >/dev/null 2>&1 || true; bind '\"\\C-h\": backward-delete-char' >/dev/null 2>&1 || true; bind '\"\\C-?\": backward-delete-char' >/dev/null 2>&1 || true; if [ -n \"\$ZSH_VERSION\" ]; then bindkey -e >/dev/null 2>&1 || true; bindkey '^?' backward-delete-char >/dev/null 2>&1 || true; bindkey '^H' backward-delete-char >/dev/null 2>&1 || true; bindkey '^[[3~' delete-char >/dev/null 2>&1 || true; bindkey -M main '^?' backward-delete-char >/dev/null 2>&1 || true; bindkey -M main '^H' backward-delete-char >/dev/null 2>&1 || true; bindkey -M main '^[[3~' delete-char >/dev/null 2>&1 || true; bindkey -M emacs '^?' backward-delete-char >/dev/null 2>&1 || true; bindkey -M emacs '^H' backward-delete-char >/dev/null 2>&1 || true; bindkey -M emacs '^[[3~' delete-char >/dev/null 2>&1 || true; bindkey -M viins '^?' vi-backward-delete-char >/dev/null 2>&1 || true; bindkey -M viins '^H' vi-backward-delete-char >/dev/null 2>&1 || true; bindkey -M viins '^[[3~' vi-delete-char >/dev/null 2>&1 || true; bindkey -M vicmd '^?' backward-delete-char >/dev/null 2>&1 || true; bindkey -M vicmd '^H' backward-delete-char >/dev/null 2>&1 || true; bindkey -M vicmd '^[[3~' delete-char >/dev/null 2>&1 || true; fi; cd '$escaped_path'"
-
-    apply_init_cmd_retry() {
-        write_chars_retry "$init_cmd" && press_enter_retry
-    }
-
-    if apply_init_cmd_retry; then
-        cwd_applied=true
-    fi
-
-    # Shell-only: ensure/focus shell tab with project cwd.
-    if [[ -z "$tool" ]]; then
-        local shell_created=false
-        if ! echo "$existing_tabs" | grep -Fqx "shell" 2>/dev/null; then
-            if ! timeout 2 "$zellij_bin" --session "$project_name" action new-tab --name "shell" --cwd "$project_path" >/dev/null 2>&1; then
-                printf '{"ok":true,"session":"%s","shell_pending":true,"cwd_applied":%s}\n' "$project_name" "$cwd_applied"
-                return 0
-            fi
-            shell_created=true
-        fi
-
-        if focus_tab_retry "shell"; then
-            # Re-apply inside the actual shell tab so erase/cwd are correct there as well.
-            if apply_init_cmd_retry; then
-                cwd_applied=true
-            fi
-
-            if [[ "$shell_created" == "true" ]]; then
-                printf '{"ok":true,"session":"%s","shell_tab_created":true,"cwd_applied":%s}\n' "$project_name" "$cwd_applied"
-            else
-                printf '{"ok":true,"session":"%s","cwd_applied":%s}\n' "$project_name" "$cwd_applied"
-            fi
-        else
-            printf '{"ok":true,"session":"%s","shell_pending":true,"cwd_applied":%s}\n' "$project_name" "$cwd_applied"
-        fi
-        return 0
-    fi
-
-    local tool_cmd=""
-    case "$tool" in
-        amp) tool_cmd="amp" ;;
-        claude) tool_cmd="claude" ;;
-        codex) tool_cmd="codex" ;;
-        opencode) tool_cmd="opencode" ;;
-        pi) tool_cmd="pi" ;;
-        *) tool_cmd="$tool" ;;
-    esac
-
-    # Tool mode: ensure/focus tool tab in project cwd.
-    if echo "$existing_tabs" | grep -Fqx "$tool" 2>/dev/null; then
-        if focus_tab_retry "$tool"; then
-            printf '{"ok":true,"session":"%s","tool":"%s","already_running":true,"cwd_applied":%s}\n' "$project_name" "$tool" "$cwd_applied"
-        else
-            printf '{"ok":true,"session":"%s","tool_pending":true,"cwd_applied":%s}\n' "$project_name" "$cwd_applied"
-        fi
-        return 0
-    fi
-
-    if ! timeout 2 "$zellij_bin" --session "$project_name" action new-tab --name "$tool" --cwd "$project_path" >/dev/null 2>&1; then
-        printf '{"ok":true,"session":"%s","tool_pending":true,"cwd_applied":%s}\n' "$project_name" "$cwd_applied"
-        return 0
-    fi
-
-    if focus_tab_retry "$tool"; then
-        local escaped_tool_cmd=""
-        escaped_tool_cmd=$(printf '%s' "$tool_cmd" | sed "s/'/'\"'\"'/g")
-        local launch_cmd="bash -lic '$escaped_tool_cmd'"
-
-        if write_chars_retry "$launch_cmd" && press_enter_retry; then
-            printf '{"ok":true,"session":"%s","tool":"%s","tool_tab_created":true,"tool_launch_sent":true,"cwd_applied":%s}\n' "$project_name" "$tool" "$cwd_applied"
-        else
-            printf '{"ok":true,"session":"%s","tool":"%s","tool_tab_created":true,"tool_launch_pending":true,"cwd_applied":%s}\n' "$project_name" "$tool" "$cwd_applied"
-        fi
-    else
-        printf '{"ok":true,"session":"%s","tool_pending":true,"cwd_applied":%s}\n' "$project_name" "$cwd_applied"
-    fi
-}
-
-api_active_tab() {
-    local session_name="$1"
-    local zellij_bin="${VAIBHAV_ZELLIJ_BIN:-$(command -v zellij 2>/dev/null || true)}"
-
-    if [[ -z "$session_name" ]]; then
-        printf '{"ok":false,"error":"session name required"}\n'
-        return 1
-    fi
-
-    if [[ -z "$zellij_bin" ]]; then
-        printf '{"ok":false,"error":"zellij not found"}\n'
-        return 1
-    fi
-
-    local session_active=false
-    if timeout 1 "$zellij_bin" list-sessions --no-formatting 2>/dev/null | awk '
-            /^[[:space:]]*$/ { next }
-            /No active sessions/ { next }
-            /\(EXITED/ { next }
-            { print $1 }
-        ' | grep -Fqx "$session_name" 2>/dev/null; then
-        session_active=true
-    fi
-
-    if [[ "$session_active" != "true" ]]; then
-        printf '{"ok":true,"session":"%s","active_tab":"","pending":true}\n' "$session_name"
-        return 0
-    fi
-
-    local active_tab=""
-    local layout=""
-    layout=$(timeout 2 "$zellij_bin" --session "$session_name" action dump-layout 2>/dev/null || true)
-    if [[ -n "$layout" ]]; then
-        active_tab=$(printf '%s\n' "$layout" | sed -n 's/^[[:space:]]*tab name="\([^"]*\)".*focus=true.*/\1/p' | head -n 1)
-    fi
-
-    if [[ -z "$active_tab" ]]; then
-        local metadata_file=""
-        metadata_file=$(ls -1t "$HOME"/.cache/zellij/*/session_info/"$session_name"/session-metadata.kdl 2>/dev/null | head -n 1 || true)
-
-        if [[ -n "$metadata_file" && -f "$metadata_file" ]]; then
-            active_tab=$(awk '
-                BEGIN { in_tabs=0; in_tab=0; tab_name=""; tab_active="false" }
-                /^[[:space:]]*tabs[[:space:]]*\{/ { in_tabs=1; next }
-                in_tabs && /^[[:space:]]*tab[[:space:]]*\{/ {
-                    in_tab=1
-                    tab_name=""
-                    tab_active="false"
-                    next
-                }
-                in_tabs && in_tab && /^[[:space:]]*name[[:space:]]*"/ {
-                    line=$0
-                    sub(/^[[:space:]]*name[[:space:]]*"/, "", line)
-                    sub(/".*$/, "", line)
-                    tab_name=line
-                    next
-                }
-                in_tabs && in_tab && /^[[:space:]]*active[[:space:]]+/ {
-                    tab_active=$2
-                    next
-                }
-                in_tabs && in_tab && /^[[:space:]]*\}/ {
-                    if (tab_active == "true" && tab_name != "") {
-                        print tab_name
-                        exit
-                    }
-                    in_tab=0
-                    next
-                }
-                in_tabs && !in_tab && /^[[:space:]]*\}/ {
-                    in_tabs=0
-                    next
-                }
-            ' "$metadata_file" | head -n 1)
-        fi
-    fi
-
-    if [[ -n "$active_tab" ]]; then
-        printf '{"ok":true,"session":"%s","active_tab":"%s"}\n' "$session_name" "$active_tab"
-    else
-        printf '{"ok":true,"session":"%s","active_tab":"","pending":true}\n' "$session_name"
-    fi
-}
-
-api_focus_tab() {
-    local session_name="$1"
-    local tab_name="$2"
-    local zellij_bin="${VAIBHAV_ZELLIJ_BIN:-$(command -v zellij 2>/dev/null || true)}"
-
-    if [[ -z "$session_name" ]]; then
-        printf '{"ok":false,"error":"session name required"}\n'
-        return 1
-    fi
-
-    if [[ -z "$tab_name" ]]; then
-        printf '{"ok":false,"error":"tab name required"}\n'
-        return 1
-    fi
-
-    if [[ -z "$zellij_bin" ]]; then
-        printf '{"ok":false,"error":"zellij not found"}\n'
-        return 1
-    fi
-
-    local retries=0
-    local max_retries=12
-    local session_active=false
-    while [[ $retries -lt $max_retries ]]; do
-        if timeout 1 "$zellij_bin" list-sessions --no-formatting 2>/dev/null | awk '
-                /^[[:space:]]*$/ { next }
-                /No active sessions/ { next }
-                /\(EXITED/ { next }
-                { print $1 }
-            ' | grep -Fqx "$session_name" 2>/dev/null; then
-            session_active=true
-            break
-        fi
-        retries=$((retries + 1))
-        sleep 0.3
-    done
-
-    if [[ "$session_active" != "true" ]]; then
-        printf '{"ok":true,"session":"%s","tab":"%s","pending":true}\n' "$session_name" "$tab_name"
-        return 0
-    fi
-
-    local client_wait=0
-    local client_count=0
-    while [[ $client_wait -lt 8 ]]; do
-        client_count=$(timeout 1 "$zellij_bin" --session "$session_name" action list-clients 2>/dev/null |
-            awk 'NR > 1 && $1 ~ /^[0-9]+$/ { c++ } END { print c + 0 }')
-        if [[ "$client_count" -gt 0 ]]; then
-            break
-        fi
-        client_wait=$((client_wait + 1))
-        sleep 0.3
-    done
-
-    if [[ "$client_count" -le 0 ]]; then
-        printf '{"ok":true,"session":"%s","tab":"%s","pending":true}\n' "$session_name" "$tab_name"
-        return 0
-    fi
-
-    local tabs=""
-    tabs=$(timeout 2 "$zellij_bin" --session "$session_name" action query-tab-names 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
-    if ! echo "$tabs" | grep -Fqx "$tab_name" 2>/dev/null; then
-        printf '{"ok":true,"session":"%s","tab":"%s","exists":false}\n' "$session_name" "$tab_name"
-        return 0
-    fi
-
-    local i=0
-    while [[ $i -lt 8 ]]; do
-        if timeout 1 "$zellij_bin" --session "$session_name" action go-to-tab-name "$tab_name" >/dev/null 2>&1; then
-            printf '{"ok":true,"session":"%s","tab":"%s","exists":true,"focused":true}\n' "$session_name" "$tab_name"
-            return 0
-        fi
-        i=$((i + 1))
-        sleep 0.2
-    done
-
-    printf '{"ok":true,"session":"%s","tab":"%s","exists":true,"pending":true}\n' "$session_name" "$tab_name"
 }

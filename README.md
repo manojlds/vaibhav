@@ -5,10 +5,10 @@ Remote AI coding environment — run tools like Amp, Claude Code, Codex, OpenCod
 ## How it works
 
 ```
-Android (Termux) → SSH/mosh over Tailscale → Ubuntu Desktop → tmux/zellij sessions → AI tools
+Android (Termux) → SSH/mosh over Tailscale → Ubuntu Desktop → tmux sessions → AI tools
 ```
 
-Each project gets its own session (tmux by default, zellij optional). Sessions persist when you disconnect — close Termux, reopen later, and pick up exactly where you left off.
+Each project gets its own tmux session. Sessions persist when you disconnect — close Termux, reopen later, and pick up exactly where you left off.
 
 ## Quick start
 
@@ -20,10 +20,8 @@ cd ~/projects/vaibhav
 ```
 
 This will:
-- Install and configure tmux (default multiplexer)
-- Optionally install zellij via Cargo (`cargo install --locked zellij`)
-- Link a mobile-friendly zellij config (`~/.config/zellij/config.kdl`)
-- Optionally set up OpenCode Web and Zellij Web as systemd services (localhost-only, with `tailscale serve` for HTTPS access)
+- Install and configure tmux
+- Optionally set up OpenCode Web as a systemd service (localhost-only, with `tailscale serve` for HTTPS access)
 - Install the `vaibhav` command
 - Set up SSH server
 - Optionally install mosh for resilient mobile connections
@@ -64,21 +62,11 @@ vaibhav scan                # Auto-register all projects in configured directory
 vaibhav scan ~/other        # Scan a specific directory
 vaibhav doctor              # Show current LAN vs Tailscale routing
 vaibhav refresh             # Detect desktop LAN IP over SSH and save VAIBHAV_LAN_HOST
-vaibhav web                 # Show OpenCode Web + Zellij Web status/URLs
-vaibhav web zellij token    # Create a Zellij Web login token
+vaibhav web                 # Show OpenCode Web status/URLs
 vaibhav --version           # Check installed version
 ```
 
-Use a one-off backend override when you want tmux and zellij to coexist during testing:
-
-```bash
-vaibhav --mux zellij heimdall amp  # test zellij for this command only
-vaibhav --mux tmux list            # force tmux for one command
-```
-
 ### Switching projects
-
-#### tmux
 
 Once inside tmux, you can switch projects without disconnecting:
 
@@ -92,13 +80,6 @@ Once inside tmux, you can switch projects without disconnecting:
 
 (`Prefix` is `Ctrl+b` by default)
 
-#### zellij
-
-- Use `Alt+s` to open the vaibhav switcher popup (same fuzzy switcher style as tmux).
-- Use `Ctrl+o` then `w` for Zellij's built-in session manager when needed.
-- Use `Alt+n` / `Alt+p` for next/previous tab.
-- Use `vaibhav <project> <tool>` to open/focus a project session and add tool tabs.
-
 ## Configuration
 
 `vaibhav init` creates `~/.config/vaibhav/config`:
@@ -110,8 +91,7 @@ VAIBHAV_SSH_HOST="desktop"                    # SSH host alias
 VAIBHAV_LAN_HOST="mypc.local"                 # Optional LAN target (mDNS hostname or LAN IP) for auto-switch on home Wi-Fi
 VAIBHAV_USE_MOSH="false"                      # Use mosh by default (true/false)
 VAIBHAV_MOSH_NO_INIT="true"                   # Pass --no-init to mosh (better touch scroll in Termux)
-VAIBHAV_MULTIPLEXER="auto"                    # tmux | zellij | auto (auto prefers tmux, then zellij)
-VAIBHAV_ZELLIJ_BIN="/home/user/.cargo/bin/zellij" # Optional explicit zellij path if not on PATH
+VAIBHAV_MULTIPLEXER="tmux"                    # tmux
 ```
 
 Project registry is stored at `~/.config/vaibhav/projects`.
@@ -125,8 +105,6 @@ vaibhav update --local    # phone only
 
 On Termux, this downloads and checksum-verifies the latest files, then SSHes to your desktop to `git pull`. On desktop, it runs `git pull` directly.
 
-Your configured `VAIBHAV_MULTIPLEXER` value is preserved across updates on both desktop and Termux.
-
 Use `vaibhav refresh` on Termux (while connected via Tailscale) to detect and save your desktop LAN IP into `VAIBHAV_LAN_HOST`, then use `vaibhav doctor` to verify whether SSH will route to LAN or Tailscale.
 
 See [UPDATE.md](UPDATE.md) for the full details on the update process, checksum verification, and troubleshooting.
@@ -136,14 +114,12 @@ See [UPDATE.md](UPDATE.md) for the full details on the update process, checksum 
 `vaibhav web` manages remote web UIs on your desktop via systemd user services:
 
 ```bash
-vaibhav web                 # Show OpenCode Web + Zellij Web status and URLs
+vaibhav web                 # Show OpenCode Web status and URLs
 vaibhav web opencode start  # Start OpenCode Web service
 vaibhav web opencode stop   # Stop OpenCode Web service
-vaibhav web zellij start    # Start Zellij Web service
-vaibhav web zellij token    # Create one-time login token for Zellij Web
 ```
 
-`vaibhav web --url-only` prints the OpenCode URL only (used by setup scripts), and `vaibhav web --zellij-url-only` prints the Zellij Web URL only.
+`vaibhav web --url-only` prints the OpenCode URL only (used by setup scripts).
 
 ## Ralph loop
 
@@ -180,7 +156,6 @@ vaibhav/
 │   ├── prd-skill.md     # PRD writing skill
 │   └── prd-convert.md   # PRD → prd.json converter
 ├── tmux.conf            # tmux configuration (mobile-optimized)
-├── zellij.kdl           # zellij configuration (mobile-optimized)
 ├── setup-desktop.sh     # Ubuntu desktop setup
 ├── setup-termux.sh      # Android Termux setup
 ├── RALPH.md             # Ralph loop documentation
@@ -190,13 +165,10 @@ vaibhav/
 ## Tips
 
 - **Closing Termux** doesn't kill sessions — everything keeps running on the desktop
-- **Multiple tools**: Run `vaibhav myapp amp`, then `vaibhav myapp pi` (or `vaibhav myapp claude`) to add another AI tool in a new window/tab
+- **Multiple tools**: Run `vaibhav myapp amp`, then `vaibhav myapp pi` (or `vaibhav myapp claude`) to add another AI tool in a new window
 - **Tailscale** gives you a stable connection even when switching WiFi/mobile networks
 - **Termux extra keys**: Swipe from the left edge to toggle the extra keyboard row with `ESC`, `CTRL`, `ALT`, `TAB`, and common coding symbols
 - **Pinch to zoom** in Termux to adjust text size for comfortable reading on your phone
 - **FiraCode Nerd Font** is installed during Termux setup for proper icon rendering (starship, etc.)
 - **tmux clipboard**: Use copy mode (`Ctrl+b` then `[` or `Alt+u`), select, then `Enter` or `y`; vaibhav's tmux config sends copied text to your local clipboard via OSC 52
-- **zellij switching**: Use `Alt+s` (vaibhav fuzzy switcher) or `Ctrl+o` then `w`
-- **zellij mobile rendering**: vaibhav ships `zellij.kdl` with `simplified_ui`, no pane frames, and compact layout for narrow screens
 - **After updating tmux.conf**: If tmux is already running, reload once with `tmux source-file ~/.tmux.conf`
-- **After updating zellij.kdl**: Restart zellij sessions to pick up new config

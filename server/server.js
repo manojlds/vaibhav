@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -273,7 +272,7 @@ app.get("/api/tmux-sessions", async () => {
       "list-sessions",
       "-F",
       "#{session_name}:#{session_windows}:#{session_attached}",
-    ], { timeout: 3000, env: vaibhavEnv() });
+    ], { timeout: 3000, env: tmuxEnv() });
     const sessions = stdout
       .trim()
       .split("\n")

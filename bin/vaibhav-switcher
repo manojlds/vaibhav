@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vaibhav-switcher — fuzzy project/session switcher for tmux and zellij
+# vaibhav-switcher — fuzzy project/session switcher for tmux
 # Active sessions: switch / kill. Inactive projects: pick a tool and start.
 # Intended to be launched from multiplexer keybindings (Alt+s).
 set -euo pipefail
@@ -7,42 +7,14 @@ set -euo pipefail
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 PROJECTS_FILE="$CONFIG_DIR/projects"
 
-BACKEND=""
-if [[ "${1:-}" == "--backend" ]]; then
-    if [[ $# -lt 2 ]]; then
-        echo "Error: --backend requires tmux or zellij" >&2
-        exit 1
-    fi
-    BACKEND="$2"
-    shift 2
-fi
-
-if [[ -z "$BACKEND" ]]; then
-    if [[ -n "${TMUX:-}" ]]; then
-        BACKEND="tmux"
-    elif [[ -n "${ZELLIJ:-}" ]]; then
-        BACKEND="zellij"
-    else
-        echo "Error: not inside tmux or zellij" >&2
-        exit 1
-    fi
-fi
-
-if [[ "$BACKEND" != "tmux" && "$BACKEND" != "zellij" ]]; then
-    echo "Error: unsupported backend '$BACKEND'" >&2
+if [[ -z "${TMUX:-}" ]]; then
+    echo "Error: not inside tmux" >&2
     exit 1
 fi
 
 notify() {
     local msg="$1"
-    case "$BACKEND" in
-        tmux)
-            tmux display-message "$msg" || true
-            ;;
-        zellij)
-            echo "$msg" >&2
-            ;;
-    esac
+    tmux display-message "$msg" || true
 }
 
 if ! command -v fzf >/dev/null 2>&1; then
@@ -56,43 +28,16 @@ if [[ ! -f "$PROJECTS_FILE" ]]; then
 fi
 
 list_sessions() {
-    case "$BACKEND" in
-        tmux)
-            tmux list-sessions -F '#{session_name}' 2>/dev/null || true
-            ;;
-        zellij)
-            zellij list-sessions --no-formatting 2>/dev/null |
-                awk '
-                    /^[[:space:]]*$/ { next }
-                    /No active sessions/ { next }
-                    /\(EXITED/ { next }
-                    { print $1 }
-                ' || true
-            ;;
-    esac
+    tmux list-sessions -F '#{session_name}' 2>/dev/null || true
 }
 
 list_targets() {
     local session="$1"
-    case "$BACKEND" in
-        tmux)
-            tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
-            ;;
-        zellij)
-            zellij --session "$session" action query-tab-names 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
-            ;;
-    esac
+    tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
 }
 
 current_session_name() {
-    case "$BACKEND" in
-        tmux)
-            tmux display-message -p '#{session_name}' 2>/dev/null || true
-            ;;
-        zellij)
-            printf '%s\n' "${ZELLIJ_SESSION_NAME:-}"
-            ;;
-    esac
+    tmux display-message -p '#{session_name}' 2>/dev/null || true
 }
 
 is_active_session() {
@@ -102,64 +47,27 @@ is_active_session() {
 
 kill_session() {
     local session="$1"
-    case "$BACKEND" in
-        tmux)
-            tmux kill-session -t "$session"
-            ;;
-        zellij)
-            zellij kill-session "$session"
-            ;;
-    esac
+    tmux kill-session -t "$session"
 }
 
 detach_current() {
-    case "$BACKEND" in
-        tmux)
-            tmux detach-client
-            ;;
-        zellij)
-            zellij action detach
-            ;;
-    esac
+    tmux detach-client
 }
 
 switch_session() {
     local session="$1"
-    local current_session="$2"
-
-    case "$BACKEND" in
-        tmux)
-            tmux switch-client -t "$session"
-            ;;
-        zellij)
-            [[ "$session" == "$current_session" ]] && return 0
-            zellij action switch-session "$session"
-            ;;
-    esac
+    tmux switch-client -t "$session"
 }
 
 start_project() {
     local project_name="$1"
     local tool="${2:-}"
 
-    case "$BACKEND" in
-        tmux)
-            if [[ -n "$tool" ]]; then
-                tmux run-shell -b "$HOME/bin/vaibhav '$project_name' '$tool'"
-            else
-                tmux run-shell -b "$HOME/bin/vaibhav '$project_name'"
-            fi
-            ;;
-        zellij)
-            if [[ -n "$tool" ]]; then
-                env -u ZELLIJ -u ZELLIJ_SESSION_NAME "$HOME/bin/vaibhav" "$project_name" "$tool" &
-            else
-                env -u ZELLIJ -u ZELLIJ_SESSION_NAME "$HOME/bin/vaibhav" "$project_name" &
-            fi
-            sleep 0.5
-            zellij action switch-session "$project_name"
-            ;;
-    esac
+    if [[ -n "$tool" ]]; then
+        tmux run-shell -b "$HOME/bin/vaibhav '$project_name' '$tool'"
+    else
+        tmux run-shell -b "$HOME/bin/vaibhav '$project_name'"
+    fi
 }
 
 build_entries() {
@@ -266,7 +174,7 @@ while true; do
     fi
 
     if [[ "$is_active" == "true" ]]; then
-        switch_session "$project_name" "$current_session"
+        switch_session "$project_name"
         exit 0
     fi
 
