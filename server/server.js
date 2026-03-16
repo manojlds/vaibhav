@@ -37,11 +37,26 @@ await app.register(fastifyStatic, {
   decorateReply: false,
 });
 
-// Serve shared files at /files/
+// Serve shared files at /files/ with directory listing
 await app.register(fastifyStatic, {
   root: SHARE_DIR,
   prefix: "/files/",
   decorateReply: false,
+  index: false,
+  list: {
+    format: "html",
+    render(dirs, files) {
+      const items = [
+        ...dirs.map((d) => `<li>📁 <a href="${d.href}">${d.name}/</a></li>`),
+        ...files.map((f) => `<li>📄 <a href="${f.href}">${f.name}</a></li>`),
+      ];
+      return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Files</title><style>body{font-family:system-ui;background:#1a1a2e;color:#e0e0e0;padding:20px}
+a{color:#00d9ff;text-decoration:none}a:hover{text-decoration:underline}
+ul{list-style:none;padding:0}li{padding:8px 0;font-size:1.1em}</style></head>
+<body><h2>📁 Shared Files</h2><ul>${items.length ? items.join("") : "<li>No files yet</li>"}</ul></body></html>`;
+    },
+  },
 });
 
 // Serve public UI (decorateReply: true for sendFile support)
