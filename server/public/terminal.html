@@ -149,6 +149,7 @@
       $topBar.classList.remove('visible');
       $terminal.classList.remove('visible');
       $picker.classList.remove('hidden');
+      document.getElementById('app-wrapper').style.height = '0';
       await loadSessions();
     };
 
