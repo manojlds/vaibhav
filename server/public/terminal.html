@@ -679,15 +679,30 @@
       term.loadAddon(fitAddon);
       await term.open($terminal);
 
+      // Patch FitAddon: ghostty-web reserves 15px for a scrollbar we don't have
+      const origPropose = fitAddon.proposeDimensions.bind(fitAddon);
+      fitAddon.proposeDimensions = function() {
+        const dims = origPropose();
+        if (!dims || !term.renderer) return dims;
+        const metrics = term.renderer.getMetrics();
+        if (!metrics || metrics.width === 0) return dims;
+        // Add back the 15px scrollbar reservation
+        dims.cols = Math.max(dims.cols, Math.floor($terminal.clientWidth / metrics.width));
+        dims.rows = Math.max(dims.rows, Math.floor($terminal.clientHeight / metrics.height));
+        return dims;
+      };
+
       // Single source of truth for viewport height: visualViewport API
       // Avoids dvh bugs on Android Chrome and prevents triple-fire oscillation
       let resizeTimer = null;
       function applyViewportHeight() {
         const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
         document.getElementById('app-wrapper').style.height = vh + 'px';
-        fitAddon.fit();
+        requestAnimationFrame(() => fitAddon.fit());
       }
 
+      // Wait for layout to settle before first fit
+      await new Promise(r => requestAnimationFrame(r));
       applyViewportHeight();
 
       function debouncedResize() {
