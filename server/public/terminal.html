@@ -3,6 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#1a1a2e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
   <title>vaibhav · terminal</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -161,6 +167,66 @@
     }
     #tool-modal button:hover { border-color: #00d9ff; background: rgba(0,217,255,.05); }
     #tool-modal .cancel { color: #666; text-align: center; margin-top: 4px; margin-bottom: 0; }
+
+    /* Extra keys bar */
+    #extra-keys {
+      display: none;
+      flex-shrink: 0;
+      background: #16162a;
+      border-top: 1px solid #2a2a4a;
+      padding: 4px 4px;
+      gap: 3px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    #extra-keys.visible { display: flex; }
+    #extra-keys button {
+      background: #2a2a3e;
+      border: 1px solid #3a3a5a;
+      color: #ccc;
+      font-family: inherit;
+      font-size: 13px;
+      min-width: 36px;
+      height: 32px;
+      padding: 0 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+      transition: background .1s, border-color .1s;
+    }
+    #extra-keys button:active { background: #3a3a5a; }
+    #extra-keys button.modifier { color: #888; }
+    #extra-keys button.modifier.held { background: #00d9ff; color: #1a1a2e; border-color: #00d9ff; }
+    #extra-keys .arrow { font-size: 15px; min-width: 32px; padding: 0 6px; }
+
+    /* Reconnect overlay */
+    #reconnect-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(26,26,46,.85);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #reconnect-overlay.visible { display: flex; }
+    #reconnect-overlay .msg { color: #888; font-size: 14px; }
+    #reconnect-overlay button {
+      background: #00d9ff;
+      color: #1a1a2e;
+      border: none;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 10px 28px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    #reconnect-overlay .countdown { color: #555; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -169,7 +235,30 @@
     <span class="session-label" id="bar-session-name"></span>
     <button id="btn-switch" onclick="showPicker()">switch</button>
   </div>
-  <div id="terminal"></div>
+  <div id="terminal">
+    <div id="reconnect-overlay">
+      <div class="msg" id="reconnect-msg">connection lost</div>
+      <button id="reconnect-btn" onclick="reconnectNow()">reconnect</button>
+      <div class="countdown" id="reconnect-countdown"></div>
+    </div>
+  </div>
+  <div id="extra-keys">
+    <button class="modifier" data-mod="ctrl">Ctrl</button>
+    <button class="modifier" data-mod="alt">Alt</button>
+    <button data-key="Escape">Esc</button>
+    <button data-key="Tab">Tab</button>
+    <button class="arrow" data-key="ArrowUp">↑</button>
+    <button class="arrow" data-key="ArrowDown">↓</button>
+    <button class="arrow" data-key="ArrowLeft">←</button>
+    <button class="arrow" data-key="ArrowRight">→</button>
+    <button data-key="|">|</button>
+    <button data-key="~">~</button>
+    <button data-key="/">/</button>
+    <button data-key="-">-</button>
+    <button data-key="_">_</button>
+    <button id="font-dec" data-action="font-dec">A−</button>
+    <button id="font-inc" data-action="font-inc">A+</button>
+  </div>
   </div>
 
   <div id="picker">
@@ -221,14 +310,105 @@
     const $filter = document.getElementById('filter-input');
     const $toolOverlay = document.getElementById('tool-modal-overlay');
     const $toolTitle = document.getElementById('tool-modal-title');
+    const $extraKeys = document.getElementById('extra-keys');
+    const $reconnectOverlay = document.getElementById('reconnect-overlay');
+    const $reconnectMsg = document.getElementById('reconnect-msg');
+    const $reconnectCountdown = document.getElementById('reconnect-countdown');
 
     let statusData = null; // cached /api/status response
     let toolPickerProject = null;
+    let reconnectTimer = null;
+    let reconnectAttempt = 0;
+    let currentFontSize = parseInt(localStorage.getItem('vaibhav-fontsize')) || 14;
+    let currentFitAddon = null;
+
+    // --- Modifier state for extra keys ---
+    const modifiers = { ctrl: false, alt: false };
+
+    function clearModifiers() {
+      modifiers.ctrl = false;
+      modifiers.alt = false;
+      document.querySelectorAll('#extra-keys .modifier').forEach(b => b.classList.remove('held'));
+    }
+
+    // --- Extra keys handler ---
+    function setupExtraKeys() {
+      $extraKeys.addEventListener('click', (e) => {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        e.preventDefault();
+
+        // Modifier toggle
+        const mod = btn.dataset.mod;
+        if (mod) {
+          modifiers[mod] = !modifiers[mod];
+          btn.classList.toggle('held', modifiers[mod]);
+          refocusTerminal();
+          return;
+        }
+
+        const action = btn.dataset.action;
+        if (action === 'font-dec' || action === 'font-inc') {
+          currentFontSize = Math.max(8, Math.min(28, currentFontSize + (action === 'font-inc' ? 2 : -2)));
+          localStorage.setItem('vaibhav-fontsize', currentFontSize);
+          if (term) {
+            term.setFontSize(currentFontSize);
+            if (currentFitAddon) currentFitAddon.fit();
+          }
+          refocusTerminal();
+          return;
+        }
+
+        const key = btn.dataset.key;
+        if (!key || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+        let seq = '';
+        if (key === 'Escape') {
+          seq = '\x1b';
+        } else if (key === 'Tab') {
+          seq = modifiers.ctrl ? '\x1b[27;5;9~' : '\t';
+        } else if (key === 'ArrowUp') {
+          seq = modifiers.alt ? '\x1b\x1b[A' : '\x1b[A';
+        } else if (key === 'ArrowDown') {
+          seq = modifiers.alt ? '\x1b\x1b[B' : '\x1b[B';
+        } else if (key === 'ArrowLeft') {
+          seq = modifiers.alt ? '\x1b\x1b[D' : '\x1b[D';
+        } else if (key === 'ArrowRight') {
+          seq = modifiers.alt ? '\x1b\x1b[C' : '\x1b[C';
+        } else if (key.length === 1) {
+          if (modifiers.ctrl) {
+            // Ctrl+letter: send control character
+            const code = key.toUpperCase().charCodeAt(0);
+            if (code >= 65 && code <= 90) {
+              seq = String.fromCharCode(code - 64);
+            } else {
+              seq = key;
+            }
+          } else if (modifiers.alt) {
+            seq = '\x1b' + key;
+          } else {
+            seq = key;
+          }
+        }
+
+        if (seq) {
+          ws.send(seq);
+          clearModifiers();
+        }
+        refocusTerminal();
+      });
+    }
+
+    function refocusTerminal() {
+      const textarea = $terminal.querySelector('textarea');
+      if (textarea) textarea.focus();
+    }
 
     window.showPicker = async function showPicker() {
       disconnect();
       $topBar.classList.remove('visible');
       $terminal.classList.remove('visible');
+      $extraKeys.classList.remove('visible');
       $picker.classList.remove('hidden');
       document.getElementById('app-wrapper').style.height = '0';
       $filter.value = '';
@@ -239,8 +419,62 @@
       $picker.classList.add('hidden');
       $topBar.classList.add('visible');
       $terminal.classList.add('visible');
+      $extraKeys.classList.add('visible');
       $barName.textContent = sessionName;
     }
+
+    // --- Reconnect ---
+    function showReconnect(reason) {
+      $reconnectOverlay.classList.add('visible');
+      $reconnectMsg.textContent = reason || 'connection lost';
+      scheduleReconnect();
+    }
+
+    function hideReconnect() {
+      $reconnectOverlay.classList.remove('visible');
+      $reconnectCountdown.textContent = '';
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    }
+
+    function scheduleReconnect() {
+      reconnectAttempt++;
+      // Backoff: 2s, 4s, 8s, max 15s
+      const delay = Math.min(2000 * Math.pow(2, reconnectAttempt - 1), 15000);
+      const secs = Math.ceil(delay / 1000);
+      let remaining = secs;
+      $reconnectCountdown.textContent = `reconnecting in ${remaining}s…`;
+
+      const tick = setInterval(() => {
+        remaining--;
+        if (remaining > 0) {
+          $reconnectCountdown.textContent = `reconnecting in ${remaining}s…`;
+        } else {
+          clearInterval(tick);
+        }
+      }, 1000);
+
+      reconnectTimer = setTimeout(() => {
+        clearInterval(tick);
+        if (currentSession) {
+          $reconnectCountdown.textContent = 'reconnecting…';
+          connectSession(currentSession);
+        }
+      }, delay);
+    }
+
+    window.reconnectNow = function() {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (currentSession) {
+        $reconnectCountdown.textContent = 'reconnecting…';
+        connectSession(currentSession);
+      }
+    };
 
     // --- Fuzzy search (matches Android app) ---
     function fuzzyMatch(target, query) {
@@ -286,15 +520,19 @@
       const projects = statusData.projects || [];
       const sessions = statusData.sessions || [];
       const projectNames = new Set(projects.map(p => p.name));
+      const sessionMap = new Map(sessions.map(s => [s.name, s]));
       const items = [];
 
       // Active projects first
       for (const p of projects) {
-        if (p.active) items.push({ name: p.name, active: true, isProject: true });
+        if (p.active) {
+          const s = sessionMap.get(p.name);
+          items.push({ name: p.name, active: true, isProject: true, windows: s?.windows, attached: s?.attached });
+        }
       }
       // Active sessions not in projects
       for (const s of sessions) {
-        if (!projectNames.has(s)) items.push({ name: s, active: true, isProject: false });
+        if (!projectNames.has(s.name)) items.push({ name: s.name, active: true, isProject: false, windows: s.windows, attached: s.attached });
       }
       // Inactive projects
       for (const p of projects) {
@@ -324,9 +562,16 @@
         const li = document.createElement('li');
         li.className = item.active ? 'active' : 'inactive';
         const icon = item.active ? '🖥️' : '▶️';
-        const badge = item.active
-          ? '<span class="badge badge-active">active</span>'
-          : (item.isProject ? '<span class="badge badge-project">project</span>' : '');
+        let badge = '';
+        if (item.active) {
+          const parts = [];
+          if (item.windows) parts.push(`${item.windows} win`);
+          if (item.attached) parts.push('attached');
+          const detail = parts.length ? ` · ${parts.join(' · ')}` : '';
+          badge = `<span class="badge badge-active">active${esc(detail)}</span>`;
+        } else if (item.isProject) {
+          badge = '<span class="badge badge-project">project</span>';
+        }
         li.innerHTML = `
           <span class="item-left">
             <span class="icon">${icon}</span>
@@ -395,23 +640,28 @@
       currentSession = name;
       setSessionURL(name);
       showTerminal(name);
+      hideReconnect();
 
       await init();
 
       if (term) {
         term.dispose();
       }
+      // Preserve the reconnect overlay element
+      const overlay = $reconnectOverlay;
       $terminal.innerHTML = '';
+      $terminal.appendChild(overlay);
 
       term = new Terminal({
         cols: 80,
         rows: 24,
         fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
-        fontSize: 14,
+        fontSize: currentFontSize,
         theme: { background: '#1a1a2e', foreground: '#e0e0e0' },
       });
 
       const fitAddon = new FitAddon();
+      currentFitAddon = fitAddon;
       term.loadAddon(fitAddon);
       await term.open($terminal);
 
@@ -522,9 +772,11 @@
           ws.send(`\x1b[<0;${col};${row}m`);
         }
 
-        function sendScroll(up) {
+        function sendScroll(up, col, row) {
           if (!ws || ws.readyState !== WebSocket.OPEN) return;
-          ws.send(up ? '\x1b[A' : '\x1b[B');
+          // SGR mouse wheel: button 64 = scroll up, 65 = scroll down
+          const btn = up ? 64 : 65;
+          ws.send(`\x1b[<${btn};${col};${row}M`);
         }
 
         $terminal.addEventListener('touchstart', (e) => {
@@ -553,8 +805,11 @@
           if (Math.abs(deltaY) >= scrollThreshold && now - lastScrollTime > 30) {
             const lines = Math.max(1, Math.floor(Math.abs(deltaY) / scrollThreshold));
             const up = deltaY < 0;
+            const coords = getCellCoords(touch.clientX, touch.clientY);
+            const col = coords ? coords.col : 1;
+            const row = coords ? coords.row : 1;
             for (let i = 0; i < lines; i++) {
-              sendScroll(up);
+              sendScroll(up, col, row);
             }
             touchStartY = touch.clientY;
             lastScrollTime = now;
@@ -576,18 +831,20 @@
           textarea.focus();
         }, { passive: true });
 
-        // Also handle paste events directly
+        // Also handle paste events directly — wrap in bracketed paste mode
         textarea.addEventListener('paste', (e) => {
           const text = e.clipboardData?.getData('text');
           if (text && ws && ws.readyState === WebSocket.OPEN) {
             console.log('[vaibhav] paste:', text.length, 'chars');
-            ws.send(text);
+            ws.send('\x1b[200~' + text + '\x1b[201~');
           }
         });
       }
 
       ws.onopen = () => {
         console.log('[vaibhav] ws open');
+        reconnectAttempt = 0;
+        hideReconnect();
         term.focus();
       };
 
@@ -597,12 +854,18 @@
 
       ws.onclose = (e) => {
         console.log('[vaibhav] ws closed', e.code, e.reason);
-        term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n');
+        // Code 1000 = clean close (e.g. tmux detach / session killed)
+        if (e.code === 1000) {
+          term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n');
+          showReconnect('session ended');
+        } else {
+          term.write('\r\n\x1b[90m[connection lost]\x1b[0m\r\n');
+          showReconnect('connection lost');
+        }
       };
 
       ws.onerror = (e) => {
         console.error('[vaibhav] ws error', e);
-        term.write('\r\n\x1b[31m[connection error]\x1b[0m\r\n');
       };
 
       term.onResize(({ cols, rows }) => {
@@ -614,6 +877,12 @@
     }
 
     function disconnect() {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      reconnectAttempt = 0;
+      hideReconnect();
       if (ws) {
         ws.close();
         ws = null;
@@ -622,11 +891,19 @@
         term.dispose();
         term = null;
       }
+      const overlay = $reconnectOverlay;
       $terminal.innerHTML = '';
+      $terminal.appendChild(overlay);
       currentSession = null;
     }
 
+    // --- Service Worker registration ---
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+
     // --- Init ---
+    setupExtraKeys();
     const urlSession = getSessionFromURL();
     if (urlSession) {
       connectSession(urlSession);
