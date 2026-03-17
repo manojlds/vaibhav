@@ -115,25 +115,72 @@ async function activeTmuxSessions() {
 
 // --- API routes (tmux-native) ---
 app.get("/api/status", async () => {
-  const [projects, sessions] = await Promise.all([
+  const [projects, sessionDetails, windowDetails] = await Promise.all([
     loadProjects(),
-    activeTmuxSessions(),
+    (async () => {
+      try {
+        const out = await tmuxExec([
+          "list-sessions",
+          "-F",
+          "#{session_name}:#{session_windows}:#{session_attached}",
+        ]);
+        return out
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [name, windows, attached] = line.split(":");
+            return {
+              name,
+              windows: parseInt(windows),
+              attached: parseInt(attached) > 0,
+            };
+          });
+      } catch {
+        return [];
+      }
+    })(),
+    (async () => {
+      try {
+        const out = await tmuxExec([
+          "list-windows",
+          "-a",
+          "-F",
+          "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}",
+        ]);
+        return out
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [session, index, name, active] = line.split("\t");
+            return { session, index: parseInt(index), name, active: active === "1" };
+          });
+      } catch {
+        return [];
+      }
+    })(),
   ]);
-  const activeSet = new Set(sessions);
+  const activeSet = new Set(sessionDetails.map((s) => s.name));
   return {
     projects: projects.map((p) => ({
       ...p,
       active: activeSet.has(p.name),
     })),
-    sessions,
+    sessions: sessionDetails,
+    windows: windowDetails,
   };
 });
 
 app.post("/api/kill", async (req) => {
-  const { session = "" } = req.body || {};
+  const { session = "", window: winTarget = "" } = req.body || {};
   if (!session) return { ok: false, error: "session name required" };
   try {
-    await tmuxExec(["kill-session", "-t", session]);
+    if (winTarget) {
+      await tmuxExec(["kill-window", "-t", `${session}:${winTarget}`]);
+    } else {
+      await tmuxExec(["kill-session", "-t", session]);
+    }
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -263,28 +310,6 @@ app.get("/terminal", async (req, reply) => {
 
 app.get("/upload", async (req, reply) => {
   return reply.sendFile("upload.html");
-});
-
-// --- tmux session list for terminal picker ---
-app.get("/api/tmux-sessions", async () => {
-  try {
-    const { stdout } = await execFileAsync("tmux", [
-      "list-sessions",
-      "-F",
-      "#{session_name}:#{session_windows}:#{session_attached}",
-    ], { timeout: 3000, env: tmuxEnv() });
-    const sessions = stdout
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const [name, windows, attached] = line.split(":");
-        return { name, windows: parseInt(windows), attached: parseInt(attached) > 0 };
-      });
-    return { ok: true, sessions };
-  } catch {
-    return { ok: true, sessions: [] };
-  }
 });
 
 // --- WebSocket PTY for ghostty-web ---

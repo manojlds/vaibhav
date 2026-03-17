@@ -111,22 +111,40 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px 16px;
+      padding: 10px 14px;
       border: 1px solid #2a2a4a;
       border-radius: 6px;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
       cursor: pointer;
       transition: border-color .15s, background .15s;
     }
     #session-list li:hover { border-color: #00d9ff; background: rgba(0,217,255,.05); }
     #session-list li.active { border-color: #3a3a5a; background: rgba(0,217,255,.03); }
     #session-list li.inactive { border-color: #222240; opacity: 0.7; }
+    #session-list li.window-item {
+      padding: 6px 14px 6px 38px;
+      font-size: 13px;
+      border-color: #222240;
+      margin-bottom: 2px;
+      border-radius: 4px;
+    }
+    #session-list li.window-item .name { font-weight: 400; color: #aaa; }
+    #session-list li.window-item .icon { font-size: 12px; }
+    #session-list li.window-item.win-active .name { color: #00d9ff; font-weight: 600; }
     #session-list .item-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    #session-list .item-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     #session-list .icon { font-size: 14px; flex-shrink: 0; }
     #session-list .name { font-weight: 600; color: #e0e0e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #session-list .badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
     #session-list .badge-active { background: rgba(76,175,80,.15); color: #4caf50; }
     #session-list .badge-project { background: rgba(0,217,255,.1); color: #00d9ff; }
+    #session-list .kill-btn {
+      background: none; border: 1px solid transparent; color: #555;
+      font-size: 13px; padding: 2px 6px; border-radius: 4px; cursor: pointer;
+      font-family: inherit; transition: color .15s, border-color .15s;
+      flex-shrink: 0;
+    }
+    #session-list .kill-btn:hover { color: #e74c3c; border-color: #e74c3c; }
     #picker .empty { color: #555; font-size: 14px; }
     #picker .error { color: #e74c3c; font-size: 13px; margin-top: 12px; }
     #picker .loading { color: #555; font-size: 14px; }
@@ -533,24 +551,30 @@
       if (!statusData) return [];
       const projects = statusData.projects || [];
       const sessions = statusData.sessions || [];
+      const windows = statusData.windows || [];
       const projectNames = new Set(projects.map(p => p.name));
       const sessionMap = new Map(sessions.map(s => [s.name, s]));
+      const windowMap = new Map();
+      for (const w of windows) {
+        if (!windowMap.has(w.session)) windowMap.set(w.session, []);
+        windowMap.get(w.session).push(w);
+      }
       const items = [];
 
       // Active projects first
       for (const p of projects) {
         if (p.active) {
           const s = sessionMap.get(p.name);
-          items.push({ name: p.name, active: true, isProject: true, windows: s?.windows, attached: s?.attached });
+          items.push({ type: 'session', name: p.name, active: true, isProject: true, windows: s?.windows, attached: s?.attached, windowList: windowMap.get(p.name) || [] });
         }
       }
       // Active sessions not in projects
       for (const s of sessions) {
-        if (!projectNames.has(s.name)) items.push({ name: s.name, active: true, isProject: false, windows: s.windows, attached: s.attached });
+        if (!projectNames.has(s.name)) items.push({ type: 'session', name: s.name, active: true, isProject: false, windows: s.windows, attached: s.attached, windowList: windowMap.get(s.name) || [] });
       }
       // Inactive projects
       for (const p of projects) {
-        if (!p.active) items.push({ name: p.name, active: false, isProject: true });
+        if (!p.active) items.push({ type: 'session', name: p.name, active: false, isProject: true, windowList: [] });
       }
       return items;
     }
@@ -573,28 +597,79 @@
 
       $list.innerHTML = '';
       for (const item of items) {
+        // Session row
         const li = document.createElement('li');
         li.className = item.active ? 'active' : 'inactive';
         const icon = item.active ? '🖥️' : '▶️';
-        let badge = '';
+        let badgeHtml = '';
         if (item.active) {
           const parts = [];
-          if (item.windows) parts.push(`${item.windows} win`);
           if (item.attached) parts.push('attached');
           const detail = parts.length ? ` · ${parts.join(' · ')}` : '';
-          badge = `<span class="badge badge-active">active${esc(detail)}</span>`;
+          badgeHtml = `<span class="badge badge-active">active${esc(detail)}</span>`;
         } else if (item.isProject) {
-          badge = '<span class="badge badge-project">project</span>';
+          badgeHtml = '<span class="badge badge-project">project</span>';
         }
+        const killHtml = item.active
+          ? `<button class="kill-btn" title="Kill session" data-kill-session="${esc(item.name)}">✕</button>`
+          : '';
         li.innerHTML = `
           <span class="item-left">
             <span class="icon">${icon}</span>
             <span class="name">${esc(item.name)}</span>
           </span>
-          ${badge}`;
-        li.onclick = () => handleItemClick(item);
+          <span class="item-right">${badgeHtml}${killHtml}</span>`;
+        li.onclick = (e) => {
+          if (e.target.closest('.kill-btn')) return;
+          handleItemClick(item);
+        };
         $list.appendChild(li);
+
+        // Window rows (tree children)
+        if (item.active && item.windowList.length > 0) {
+          for (const w of item.windowList) {
+            const wli = document.createElement('li');
+            wli.className = 'window-item' + (w.active ? ' win-active' : '');
+            const wKill = item.windowList.length > 1
+              ? `<button class="kill-btn" title="Kill window" data-kill-session="${esc(item.name)}" data-kill-window="${esc(String(w.index))}">✕</button>`
+              : '';
+            wli.innerHTML = `
+              <span class="item-left">
+                <span class="icon">${w.active ? '▸' : '·'}</span>
+                <span class="name">${esc(w.index + ':' + w.name)}</span>
+              </span>
+              <span class="item-right">${wKill}</span>`;
+            wli.onclick = (e) => {
+              if (e.target.closest('.kill-btn')) return;
+              connectSession(item.name);
+            };
+            $list.appendChild(wli);
+          }
+        }
       }
+
+      // Attach kill handlers via delegation
+      $list.onclick = async (e) => {
+        const btn = e.target.closest('.kill-btn');
+        if (!btn) return;
+        e.stopPropagation();
+        const session = btn.dataset.killSession;
+        const win = btn.dataset.killWindow || '';
+        const label = win ? `window ${win}` : `session "${session}"`;
+        if (!confirm(`Kill ${label}?`)) return;
+        try {
+          const res = await fetch('/api/kill', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session, window: win }),
+          });
+          const data = await res.json();
+          if (!data.ok) alert(data.error || 'failed');
+          await loadStatus();
+        } catch (err) {
+          alert(err.message);
+        }
+      };
     }
 
     function handleItemClick(item) {
