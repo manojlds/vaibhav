@@ -39,6 +39,7 @@
       transition: color .15s, border-color .15s;
     }
     #top-bar button:hover { color: #00d9ff; border-color: #00d9ff; }
+    #top-bar div { display: flex; gap: 6px; }
 
     #app-wrapper {
       display: flex;
@@ -53,7 +54,7 @@
       position: relative;
       overflow: hidden;
       background: #1a1a2e;
-      padding: 4px;
+      padding: 0;
       touch-action: none;
     }
     #terminal.visible { display: block; }
@@ -233,7 +234,10 @@
   <div id="app-wrapper">
   <div id="top-bar">
     <span class="session-label" id="bar-session-name"></span>
-    <button id="btn-switch" onclick="showPicker()">switch</button>
+    <div>
+      <button id="btn-keys" onclick="toggleKeys()">⌨</button>
+      <button id="btn-switch" onclick="showPicker()">switch</button>
+    </div>
   </div>
   <div id="terminal">
     <div id="reconnect-overlay">
@@ -415,13 +419,23 @@
       await loadStatus();
     };
 
+    let keysVisible = localStorage.getItem('vaibhav-keys') !== 'hidden';
+
     function showTerminal(sessionName) {
       $picker.classList.add('hidden');
       $topBar.classList.add('visible');
       $terminal.classList.add('visible');
-      $extraKeys.classList.add('visible');
+      if (keysVisible) $extraKeys.classList.add('visible');
       $barName.textContent = sessionName;
     }
+
+    window.toggleKeys = function() {
+      keysVisible = !keysVisible;
+      localStorage.setItem('vaibhav-keys', keysVisible ? 'visible' : 'hidden');
+      $extraKeys.classList.toggle('visible', keysVisible);
+      if (currentFitAddon) setTimeout(() => currentFitAddon.fit(), 50);
+      refocusTerminal();
+    };
 
     // --- Reconnect ---
     function showReconnect(reason) {
