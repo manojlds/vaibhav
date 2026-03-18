@@ -284,7 +284,7 @@
   </div>
 
   <div id="picker">
-    <h1>⚡ vaibhav</h1>
+    <h1>𝗩 vaibhav</h1>
     <p class="subtitle">select a session or start a project</p>
     <div id="filter-box">
       <input id="filter-input" type="text" placeholder="filter..." autocomplete="off" />
@@ -432,7 +432,7 @@
       $terminal.classList.remove('visible');
       $extraKeys.classList.remove('visible');
       $picker.classList.remove('hidden');
-      document.getElementById('app-wrapper').style.height = '0';
+      document.getElementById('app-wrapper').style.height = '';
       $filter.value = '';
       await loadStatus();
     };
@@ -648,28 +648,6 @@
         }
       }
 
-      // Attach kill handlers via delegation
-      $list.onclick = async (e) => {
-        const btn = e.target.closest('.kill-btn');
-        if (!btn) return;
-        e.stopPropagation();
-        const session = btn.dataset.killSession;
-        const win = btn.dataset.killWindow || '';
-        const label = win ? `window ${win}` : `session "${session}"`;
-        if (!confirm(`Kill ${label}?`)) return;
-        try {
-          const res = await fetch('/api/kill', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session, window: win }),
-          });
-          const data = await res.json();
-          if (!data.ok) alert(data.error || 'failed');
-          await loadStatus();
-        } catch (err) {
-          alert(err.message);
-        }
-      };
     }
 
     function handleItemClick(item) {
@@ -716,6 +694,29 @@
     // Filter input handler
     $filter.addEventListener('input', () => {
       if (statusData) renderList();
+    });
+
+    // Kill session/window handler (delegated once)
+    $list.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.kill-btn');
+      if (!btn) return;
+      e.stopPropagation();
+      const session = btn.dataset.killSession;
+      const win = btn.dataset.killWindow || '';
+      const label = win ? `window ${win}` : `session "${session}"`;
+      if (!confirm(`Kill ${label}?`)) return;
+      try {
+        const res = await fetch('/api/kill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session, window: win }),
+        });
+        const data = await res.json();
+        if (!data.ok) alert(data.error || 'failed');
+        await loadStatus();
+      } catch (err) {
+        alert(err.message);
+      }
     });
 
     function esc(s) {

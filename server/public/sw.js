@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vaibhav-v1';
+const CACHE_NAME = 'vaibhav-v2';
 const PRECACHE = [
   '/terminal',
   '/ghostty/ghostty-web.js',
