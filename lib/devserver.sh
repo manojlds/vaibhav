@@ -116,7 +116,8 @@ dev_start() {
     # Start process-compose in daemon mode (-D forks and exits)
     # Run from project dir so working_dir and mise .mise.toml resolve correctly
     # Note: process-compose -D may exit with non-zero even on success
-    (set +e; cd "$project_path" && process-compose up -D --tui=false > .process-compose.log 2>&1) || true
+    (set +e; cd "$project_path" && \
+        process-compose up -D --tui=false > .process-compose.log 2>&1) || true
 
     # Give the daemon a moment to start
     sleep 1
