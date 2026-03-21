@@ -1,11 +1,6 @@
 # shellcheck shell=bash
 # vaibhav/lib/devserver.sh — Dev server management via process-compose + tailscale serve
 
-# Ensure mise shims are in PATH (covers sessions started before ~/.profile update)
-if [[ -d "$HOME/.local/share/mise/shims" ]] && [[ ":$PATH:" != *":$HOME/.local/share/mise/shims:"* ]]; then
-    export PATH="$HOME/.local/share/mise/shims:$PATH"
-fi
-
 DEVSERVERS_FILE="$CONFIG_DIR/devservers"
 DEVSERVER_TS_PORT_START=10443
 
