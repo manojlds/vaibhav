@@ -1,6 +1,11 @@
 # shellcheck shell=bash
 # vaibhav/lib/devserver.sh — Dev server management via process-compose + tailscale serve
 
+# Ensure mise shims are in PATH (covers sessions started before ~/.profile update)
+if [[ -d "$HOME/.local/share/mise/shims" ]] && [[ ":$PATH:" != *":$HOME/.local/share/mise/shims:"* ]]; then
+    export PATH="$HOME/.local/share/mise/shims:$PATH"
+fi
+
 DEVSERVERS_FILE="$CONFIG_DIR/devservers"
 DEVSERVER_TS_PORT_START=10443
 
@@ -39,11 +44,19 @@ _ds_next_tsport() {
 _ds_detect_port() {
     local project_path="$1"
     local pc_file="$project_path/process-compose.yaml"
+    local port=""
 
     if [[ -f "$pc_file" ]]; then
-        # Extract port from readiness_probe.http_get.port
-        grep -A5 'http_get:' "$pc_file" | grep 'port:' | head -1 | awk '{print $2}'
+        # Try readiness_probe.http_get.port first
+        port=$(grep -A5 'http_get:' "$pc_file" 2>/dev/null | grep 'port:' | head -1 | awk '{print $2}')
+
+        # Fall back to x-port top-level annotation
+        if [[ -z "$port" ]]; then
+            port=$(grep '^x-port:' "$pc_file" 2>/dev/null | awk '{print $2}')
+        fi
     fi
+
+    echo "$port"
 }
 
 # Check if a process-compose is running for a project
