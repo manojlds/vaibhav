@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#1a1a2e" />
+  <link rel="icon" href="/icon-192.png" />
+  <title>vaibhav · dev servers</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1a2e; color: #e0e0e0; font-family: system-ui, -apple-system, sans-serif; min-height: 100dvh; }
+
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid #2a2a4a;
+    }
+    .header h1 { font-size: 18px; font-weight: 600; color: #00d9ff; }
+    .header a {
+      color: #555; text-decoration: none; font-size: 13px;
+      padding: 4px 12px; border: 1px solid #2a2a4a; border-radius: 6px;
+      transition: color .15s, border-color .15s;
+    }
+    .header a:hover { color: #00d9ff; border-color: #00d9ff; }
+
+    .content { padding: 16px 20px; max-width: 480px; margin: 0 auto; }
+
+    .empty { color: #555; font-size: 14px; text-align: center; margin-top: 40px; }
+    .empty code { color: #888; background: #16162a; padding: 2px 8px; border-radius: 4px; font-size: 13px; }
+
+    .loading { color: #555; font-size: 14px; text-align: center; margin-top: 40px; }
+
+    .server-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+
+    .server-card {
+      background: #16162a;
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      padding: 16px;
+      transition: border-color .15s;
+    }
+    .server-card:hover { border-color: #3a3a5a; }
+
+    .server-top {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .server-name { font-weight: 700; font-size: 16px; color: #e0e0e0; }
+    .server-status {
+      font-size: 11px; font-weight: 600; padding: 3px 10px;
+      border-radius: 12px; text-transform: uppercase; letter-spacing: 0.03em;
+    }
+    .server-status.running { background: #1a3a2a; color: #50FA7B; }
+    .server-status.stopped { background: #3a1a1a; color: #FF5555; }
+
+    .server-urls { margin-bottom: 12px; }
+    .server-url {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 13px; padding: 4px 0;
+    }
+    .server-url .label { color: #555; min-width: 60px; }
+    .server-url a {
+      color: #00d9ff; text-decoration: none;
+      word-break: break-all;
+      transition: color .15s;
+    }
+    .server-url a:hover { color: #8BE9FD; }
+    .server-url .port { color: #888; }
+
+    .server-actions {
+      display: flex; gap: 8px;
+      border-top: 1px solid #2a2a4a;
+      padding-top: 12px;
+    }
+    .server-actions button {
+      flex: 1;
+      background: #2a2a3e;
+      border: 1px solid #3a3a5a;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    .server-actions button:hover { border-color: #00d9ff; color: #00d9ff; }
+    .server-actions button:active { background: #3a3a5a; }
+    .server-actions button.stop:hover { border-color: #FF5555; color: #FF5555; }
+    .server-actions button.start:hover { border-color: #50FA7B; color: #50FA7B; }
+    .server-actions button:disabled {
+      opacity: 0.4; cursor: not-allowed;
+      border-color: #3a3a5a; color: #888;
+    }
+
+    .toast {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: #2a2a3e; border: 1px solid #3a3a5a;
+      color: #e0e0e0; font-size: 13px;
+      padding: 10px 20px; border-radius: 8px;
+      opacity: 0; transition: opacity .3s;
+      pointer-events: none; z-index: 100;
+    }
+    .toast.visible { opacity: 1; }
+    .toast.error { border-color: #FF5555; color: #FF5555; }
+    .toast.success { border-color: #50FA7B; color: #50FA7B; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🚀 Dev Servers</h1>
+    <a href="/">← Home</a>
+  </div>
+
+  <div class="content">
+    <div class="loading" id="loading">Loading...</div>
+    <ul class="server-list" id="server-list" style="display:none"></ul>
+    <div class="empty" id="empty" style="display:none">
+      No dev servers registered.<br><br>
+      Start one with<br><code>vaibhav dev start &lt;project&gt;</code>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const $list = document.getElementById('server-list');
+    const $loading = document.getElementById('loading');
+    const $empty = document.getElementById('empty');
+    const $toast = document.getElementById('toast');
+    let toastTimer = null;
+
+    function showToast(msg, type = '') {
+      clearTimeout(toastTimer);
+      $toast.textContent = msg;
+      $toast.className = 'toast visible ' + type;
+      toastTimer = setTimeout(() => { $toast.className = 'toast'; }, 3000);
+    }
+
+    function renderServers(servers) {
+      $loading.style.display = 'none';
+
+      if (!servers || servers.length === 0) {
+        $list.style.display = 'none';
+        $empty.style.display = 'block';
+        return;
+      }
+
+      $empty.style.display = 'none';
+      $list.style.display = 'flex';
+      $list.innerHTML = '';
+
+      servers.forEach(ds => {
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <div class="server-card">
+            <div class="server-top">
+              <span class="server-name">${ds.project}</span>
+              <span class="server-status ${ds.running ? 'running' : 'stopped'}">${ds.running ? 'Running' : 'Stopped'}</span>
+            </div>
+            <div class="server-urls">
+              <div class="server-url">
+                <span class="label">Local</span>
+                <span class="port">${ds.localUrl}</span>
+              </div>
+              <div class="server-url">
+                <span class="label">Public</span>
+                <a href="${ds.tailscaleUrl}" target="_blank">${ds.tailscaleUrl}</a>
+              </div>
+            </div>
+            <div class="server-actions">
+              <button class="open" onclick="window.open('${ds.tailscaleUrl}', '_blank')" ${!ds.running ? 'disabled' : ''}>Open</button>
+              <button class="restart" data-project="${ds.project}" onclick="devAction('restart', '${ds.project}')">Restart</button>
+              <button class="${ds.running ? 'stop' : 'start'}" data-project="${ds.project}"
+                onclick="devAction('${ds.running ? 'stop' : 'start'}', '${ds.project}')">
+                ${ds.running ? 'Stop' : 'Start'}
+              </button>
+            </div>
+          </div>`;
+        $list.appendChild(li);
+      });
+    }
+
+    async function loadServers() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        renderServers(data.devServers || []);
+      } catch (e) {
+        $loading.style.display = 'none';
+        $empty.style.display = 'block';
+        $empty.innerHTML = '<span style="color:#FF5555">Failed to load status</span>';
+      }
+    }
+
+    async function devAction(action, project) {
+      const btns = document.querySelectorAll(`button[data-project="${project}"]`);
+      btns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+      showToast(`${action === 'stop' ? 'Stopping' : action === 'start' ? 'Starting' : 'Restarting'} ${project}...`);
+
+      try {
+        const res = await fetch('/api/dev', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, project }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showToast(`${project} ${action === 'stop' ? 'stopped' : action === 'start' ? 'started' : 'restarted'}`, 'success');
+        } else {
+          showToast(data.error || 'Action failed', 'error');
+        }
+      } catch (e) {
+        showToast('Request failed', 'error');
+      }
+
+      // Reload after a delay to let process-compose settle
+      setTimeout(loadServers, action === 'stop' ? 1000 : 3000);
+    }
+
+    loadServers();
+    // Auto-refresh every 10s
+    setInterval(loadServers, 10000);
+  </script>
+</body>
+</html>

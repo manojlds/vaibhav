@@ -70,6 +70,12 @@ const PROJECTS_FILE = path.join(
   "projects",
 );
 
+const DEVSERVERS_FILE = path.join(
+  process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config"),
+  "vaibhav",
+  "devservers",
+);
+
 function tmuxEnv() {
   return {
     ...process.env,
@@ -100,6 +106,35 @@ async function loadProjects() {
   }
 }
 
+async function loadDevServers() {
+  try {
+    const content = await fs.readFile(DEVSERVERS_FILE, "utf8");
+    const hostname = (await execFileAsync("hostname")).stdout.trim();
+    return content
+      .split("\n")
+      .filter((l) => l.trim())
+      .map((l) => {
+        const [project, port, tsport, pid] = l.split("|");
+        let running = false;
+        try {
+          if (pid) process.kill(parseInt(pid), 0);
+          running = true;
+        } catch {}
+        return {
+          project,
+          port: parseInt(port),
+          tsport: parseInt(tsport),
+          pid: pid ? parseInt(pid) : null,
+          running,
+          localUrl: `http://127.0.0.1:${port}`,
+          tailscaleUrl: `https://${hostname}.tail0b43a9.ts.net:${tsport}`,
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
 async function activeTmuxSessions() {
   try {
     const out = await tmuxExec([
@@ -115,7 +150,7 @@ async function activeTmuxSessions() {
 
 // --- API routes (tmux-native) ---
 app.get("/api/status", async () => {
-  const [projects, sessionDetails, windowDetails] = await Promise.all([
+  const [projects, sessionDetails, windowDetails, devServers] = await Promise.all([
     loadProjects(),
     (async () => {
       try {
@@ -160,6 +195,7 @@ app.get("/api/status", async () => {
         return [];
       }
     })(),
+    loadDevServers(),
   ]);
   const activeSet = new Set(sessionDetails.map((s) => s.name));
   return {
@@ -169,6 +205,7 @@ app.get("/api/status", async () => {
     })),
     sessions: sessionDetails,
     windows: windowDetails,
+    devServers,
   };
 });
 
@@ -310,6 +347,40 @@ app.get("/terminal", async (req, reply) => {
 
 app.get("/upload", async (req, reply) => {
   return reply.sendFile("upload.html");
+});
+
+app.get("/dev", async (req, reply) => {
+  return reply.sendFile("dev.html");
+});
+
+// --- Dev server management API ---
+app.post("/api/dev", async (req) => {
+  const { action = "", project = "" } = req.body || {};
+  if (!action || !project) return { ok: false, error: "action and project required" };
+
+  const projects = await loadProjects();
+  const proj = projects.find((p) => p.name === project);
+  if (!proj) return { ok: false, error: `project not found: ${project}` };
+
+  const vaibhavBin = path.join(homedir(), "projects", "vaibhav", "bin", "vaibhav");
+
+  try {
+    switch (action) {
+      case "stop":
+        await execFileAsync("bash", [vaibhavBin, "dev", "stop", project], { timeout: 15000, env: tmuxEnv() });
+        return { ok: true };
+      case "start":
+        await execFileAsync("bash", [vaibhavBin, "dev", "start", project], { timeout: 30000, env: tmuxEnv() });
+        return { ok: true };
+      case "restart":
+        await execFileAsync("bash", [vaibhavBin, "dev", "restart", project], { timeout: 30000, env: tmuxEnv() });
+        return { ok: true };
+      default:
+        return { ok: false, error: `unknown action: ${action}` };
+    }
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // --- WebSocket PTY for ghostty-web ---

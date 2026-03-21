@@ -62,6 +62,8 @@ source "$VAIBHAV_LIB/projects.sh"
 source "$VAIBHAV_LIB/setup.sh"
 # shellcheck source=../lib/doctor.sh
 source "$VAIBHAV_LIB/doctor.sh"
+# shellcheck source=../lib/devserver.sh
+source "$VAIBHAV_LIB/devserver.sh"
 
 # Main dispatch
 case "${1:-}" in
@@ -134,6 +136,10 @@ case "${1:-}" in
     share)
         shift
         share_files "$@"
+        ;;
+    dev)
+        shift
+        dev_dispatch "$@"
         ;;
     ralph)
         shift

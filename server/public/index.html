@@ -8,31 +8,53 @@
   h1 { color: #00d9ff; margin-bottom: 8px; }
   .subtitle { color: #888; margin-bottom: 32px; font-size: 0.9em; }
   .links { display: flex; flex-direction: column; gap: 12px; width: 90%; max-width: 400px; }
-  a { display: block; background: #2a2a3e; color: #e0e0e0; text-decoration: none;
+  a.card { display: block; background: #2a2a3e; color: #e0e0e0; text-decoration: none;
       padding: 16px 20px; border-radius: 8px; transition: background 0.2s; }
-  a:hover { background: #3a3a4e; }
-  a .label { color: #00d9ff; font-weight: bold; font-size: 1.1em; }
-  a .desc { color: #888; font-size: 0.85em; margin-top: 4px; }
+  a.card:hover { background: #3a3a4e; }
+  a.card .label { color: #00d9ff; font-weight: bold; font-size: 1.1em; }
+  a.card .desc { color: #888; font-size: 0.85em; margin-top: 4px; }
 </style>
 </head><body>
 <h1><svg width="28" height="28" viewBox="0 0 108 108" style="vertical-align:-4px;margin-right:4px"><rect width="108" height="108" rx="16" fill="#1a1a2e"/><path d="M34,30 L54,78 L74,30 L68,30 L54,68 L40,30 Z" fill="#8BE9FD"/><path d="M30,82 L78,82 L78,78 L30,78 Z" fill="#50FA7B"/><path d="M28,82 L32,82 L32,86 L28,86 Z" fill="#8BE9FD"/></svg> Vaibhav</h1>
 <div class="subtitle">Remote AI coding environment</div>
+
 <div class="links">
-  <a href="/terminal">
+  <a class="card" href="/dev">
+    <div class="label">🚀 Dev Servers</div>
+    <div class="desc" id="dev-desc">Manage project dev servers via process-compose</div>
+  </a>
+  <a class="card" href="/terminal">
     <div class="label">🖥️ Terminal</div>
     <div class="desc">ghostty-web terminal — connect to tmux sessions</div>
   </a>
-  <a href="/upload">
+  <a class="card" href="/upload">
     <div class="label">📸 Upload</div>
     <div class="desc">Upload screenshots and files for coding agents</div>
   </a>
-  <a href="/files/">
+  <a class="card" href="/files/">
     <div class="label">📁 Files</div>
     <div class="desc">Browse shared files in ~/vaibhav-share</div>
   </a>
-  <a href="/api/status">
+  <a class="card" href="/api/status">
     <div class="label">📊 Status</div>
     <div class="desc">API status and session info</div>
   </a>
 </div>
+
+<script>
+(async function() {
+  try {
+    const res = await fetch("/api/status");
+    const data = await res.json();
+    const servers = data.devServers || [];
+    const running = servers.filter(s => s.running).length;
+    if (servers.length > 0) {
+      const names = servers.filter(s => s.running).map(s => s.project).join(", ");
+      document.getElementById("dev-desc").textContent = running > 0
+        ? `${running} running: ${names}`
+        : `${servers.length} registered, none running`;
+    }
+  } catch(e) {}
+})();
+</script>
 </body></html>
