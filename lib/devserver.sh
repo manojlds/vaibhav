@@ -4,14 +4,14 @@
 DEVSERVERS_FILE="$CONFIG_DIR/devservers"
 DEVSERVER_TS_PORT_START=10443
 
-# Optional per-project process metadata file.
+# Optional per-project process metadata override file.
 # Format (either style):
 #   process|port|http
 #   process=port
 #
 # Example:
 #   server|4000|http
-#   otel-collector|4318|http
+#   otel-collector|4318|nohttp
 #   temporal-server||nohttp
 
 # --- Helpers ---
@@ -128,13 +128,17 @@ _ds_remove_entry() {
     sed -i "/^${project}|${process}|/d" "$DEVSERVERS_FILE"
 }
 
+_ds_port_is_open() {
+    local port="$1"
+    [[ -n "$port" ]] || return 1
+    (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1
+}
+
 _ds_process_running() {
     local task_path="$1" port="${2:-}"
 
-    if [[ -n "$port" ]]; then
-        if (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
-            return 0
-        fi
+    if _ds_port_is_open "$port"; then
+        return 0
     fi
 
     [[ -n "$task_path" ]] && pgrep -f "$task_path" >/dev/null 2>&1
@@ -215,20 +219,60 @@ _ds_process_http_mode_from_meta() {
     fi
 }
 
-_ds_detect_port_from_task_script() {
+_ds_detect_ports_from_task_script() {
     local task_path="$1"
     [[ -f "$task_path" ]] || return 0
 
-    local port=""
-    port="$(grep -Eo '(127\.0\.0\.1|0\.0\.0\.0|localhost):[0-9]{2,5}' "$task_path" 2>/dev/null | head -1 | grep -Eo '[0-9]{2,5}' || true)"
-    if [[ -z "$port" ]]; then
-        port="$(grep -Eo 'port[[:space:]]*[:=][[:space:]]*[0-9]{2,5}' "$task_path" 2>/dev/null | head -1 | grep -Eo '[0-9]{2,5}' || true)"
-    fi
-    echo "$port"
+    {
+        grep -Eo '(127\.0\.0\.1|0\.0\.0\.0|localhost):[0-9]{2,5}' "$task_path" 2>/dev/null \
+            | grep -Eo '[0-9]{2,5}' || true
+        grep -Eo '(--[a-zA-Z0-9-]*port|port)[[:space:]:=]+[0-9]{2,5}' "$task_path" 2>/dev/null \
+            | grep -Eo '[0-9]{2,5}' || true
+        grep -Eo 'https?://[^[:space:]]+:[0-9]{2,5}' "$task_path" 2>/dev/null \
+            | grep -Eo '[0-9]{2,5}' || true
+    } | awk '$1 >= 1 && $1 <= 65535 { print $1 }' | sort -n | uniq
+}
+
+_ds_first_open_port_from_list() {
+    local ports="$1"
+    local port
+
+    while IFS= read -r port; do
+        [[ -z "$port" ]] && continue
+        if _ds_port_is_open "$port"; then
+            echo "$port"
+            return 0
+        fi
+    done <<<"$ports"
+
+    return 1
+}
+
+_ds_list_listening_ports() {
+    lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null \
+        | awk 'NR > 1 { split($9, a, ":"); p = a[length(a)]; if (p ~ /^[0-9]+$/) print p }' \
+        | sort -n \
+        | uniq || true
+}
+
+_ds_first_new_port_from_snapshot() {
+    local before_ports="$1"
+    local current_ports port
+
+    current_ports="$(_ds_list_listening_ports)"
+    while IFS= read -r port; do
+        [[ -z "$port" ]] && continue
+        if ! grep -qx "$port" <<<"$before_ports"; then
+            echo "$port"
+            return 0
+        fi
+    done <<<"$current_ports"
+
+    return 1
 }
 
 _ds_should_expose_http() {
-    local process="$1" mode="${2:-}"
+    local process="$1" mode="${2:-}" task_path="${3:-}"
 
     case "$mode" in
         http|true|yes|1)
@@ -240,14 +284,15 @@ _ds_should_expose_http() {
     esac
 
     # Heuristic defaults when no explicit metadata is provided.
-    case "$process" in
-        *temporal*|*postgres*|*mysql*|*redis*|*kafka*|*rabbit*|*db*|*queue*)
+    local hints
+    hints="${process,,} ${task_path,,}"
+    case "$hints" in
+        *temporal*|*otel*|*collector*|*grpc*|*postgres*|*mysql*|*redis*|*kafka*|*rabbit*|*nats*|*db*|*queue*|*worker*|*scheduler*)
             return 1
             ;;
-        *)
-            return 0
-            ;;
     esac
+
+    return 0
 }
 
 _ds_get_registry_entry() {
@@ -395,32 +440,62 @@ dev_start() {
     fi
 
     step "Starting devenv process(es) for ${project}: ${selected[*]}"
-    if ! (cd "$project_path" && devenv processes up --detach --no-tui "${selected[@]}"); then
-        echo -e "${RED}Error:${NC} Failed to start devenv process(es)"
-        return 1
-    fi
 
-    local name task_path port tsport http_mode
+    local name task_path port tsport http_mode candidate_ports detected_port ports_before expose_http
     local any_failed=false
     for name in "${selected[@]}"; do
         task_path="${task_path_by_process[$name]:-${exec_path_by_process[$name]:-}}"
         port="$(_ds_process_port_from_meta "$project_path" "$name")"
         http_mode="$(_ds_process_http_mode_from_meta "$project_path" "$name")"
+        candidate_ports="$(_ds_detect_ports_from_task_script "$task_path")"
+
         if [[ -z "$port" ]]; then
-            port="$(_ds_detect_port_from_task_script "$task_path")"
+            port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
+        fi
+        if [[ -z "$port" && -n "$candidate_ports" ]]; then
+            port="$(head -1 <<<"$candidate_ports")"
+        fi
+
+        ports_before="$(_ds_list_listening_ports)"
+
+        if ! (cd "$project_path" && devenv processes up --detach --no-tui "$name"); then
+            any_failed=true
+            echo -e "  ${YELLOW}Warning:${NC} failed to start ${name} via devenv --detach"
+            continue
+        fi
+
+        expose_http=false
+        if _ds_should_expose_http "$name" "$http_mode" "$task_path"; then
+            expose_http=true
         fi
 
         local is_running=false
-        local max_attempts=5
-        if [[ -n "$port" ]]; then
-            # First boot can take longer due dependency/bootstrap steps.
-            max_attempts=45
+        local max_attempts=45
+        if [[ -z "$port" && -z "$candidate_ports" ]]; then
+            max_attempts=20
         fi
+
         for (( _attempt=1; _attempt<=max_attempts; _attempt++ )); do
             if _ds_process_running "$task_path" "$port"; then
                 is_running=true
+            elif [[ -n "$candidate_ports" ]]; then
+                detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
+                if [[ -n "$detected_port" ]]; then
+                    port="$detected_port"
+                    is_running=true
+                fi
+            else
+                detected_port="$(_ds_first_new_port_from_snapshot "$ports_before" || true)"
+                if [[ -n "$detected_port" ]]; then
+                    port="$detected_port"
+                    is_running=true
+                fi
+            fi
+
+            if [[ "$is_running" == "true" ]]; then
                 break
             fi
+
             sleep 1
         done
 
@@ -431,8 +506,24 @@ dev_start() {
             for (( _attempt=1; _attempt<=max_attempts; _attempt++ )); do
                 if _ds_process_running "$task_path" "$port"; then
                     is_running=true
+                elif [[ -n "$candidate_ports" ]]; then
+                    detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
+                    if [[ -n "$detected_port" ]]; then
+                        port="$detected_port"
+                        is_running=true
+                    fi
+                else
+                    detected_port="$(_ds_first_new_port_from_snapshot "$ports_before" || true)"
+                    if [[ -n "$detected_port" ]]; then
+                        port="$detected_port"
+                        is_running=true
+                    fi
+                fi
+
+                if [[ "$is_running" == "true" ]]; then
                     break
                 fi
+
                 sleep 1
             done
         fi
@@ -445,7 +536,7 @@ dev_start() {
         fi
 
         tsport=""
-        if [[ -n "$port" ]] && _ds_should_expose_http "$name" "$http_mode"; then
+        if [[ -n "$port" && "$expose_http" == "true" ]]; then
             if [[ -n "$existing_tsport" ]]; then
                 tsport="$existing_tsport"
             else
@@ -455,6 +546,8 @@ dev_start() {
                 echo -e "  ${YELLOW}Warning:${NC} failed tailscale serve for ${name} (${port})"
                 tsport=""
             fi
+        elif [[ -n "$existing_tsport" ]]; then
+            _ds_tailscale_off "$existing_tsport"
         fi
 
         _ds_register_process_entry "$project" "$name" "$port" "$tsport" "$task_path"
@@ -472,7 +565,11 @@ dev_start() {
         fi
 
         if [[ -n "$port" ]]; then
-            ok "${name} local: http://127.0.0.1:${port}"
+            if [[ "$expose_http" == "true" ]]; then
+                ok "${name} local: http://127.0.0.1:${port}"
+            else
+                ok "${name} local: 127.0.0.1:${port}"
+            fi
         fi
         if [[ -n "$tsport" ]]; then
             ok "${name} tailscale: https://$(hostname).tail0b43a9.ts.net:${tsport}"
@@ -606,7 +703,11 @@ dev_list() {
 
         echo -e "  ${BOLD}${process}${NC} ${status}"
         if [[ -n "$port" ]]; then
-            echo -e "    ${DIM}Local:${NC}     http://127.0.0.1:${port}"
+            if _ds_should_expose_http "$process" "" "$task_path"; then
+                echo -e "    ${DIM}Local:${NC}     http://127.0.0.1:${port}"
+            else
+                echo -e "    ${DIM}Local:${NC}     127.0.0.1:${port}"
+            fi
         fi
         if [[ -n "$tsport" ]]; then
             echo -e "    ${DIM}Tailscale:${NC} https://${hostname}.tail0b43a9.ts.net:${tsport}"

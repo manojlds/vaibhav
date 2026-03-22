@@ -114,62 +114,104 @@ async function loadProjects() {
   }
 }
 
-async function readProjectDevServerMeta(projectName, processName) {
-  const projects = await loadProjects();
-  const proj = projects.find((p) => p.name === projectName);
-  if (!proj) return null;
-
-  const metaFile = path.join(proj.path, ".vaibhav-devservers");
-  try {
-    const content = await fs.readFile(metaFile, "utf8");
-    for (const rawLine of content.split("\n")) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith("#")) continue;
-
-      if (line.includes("|")) {
-        const [name, portRaw] = line.split("|");
-        if (name === processName) {
-          const port = portRaw ? parseInt(portRaw, 10) : null;
-          return { port: Number.isFinite(port) ? port : null };
-        }
-      } else if (line.includes("=")) {
-        const [name, portRaw] = line.split("=");
-        if (name === processName) {
-          const port = portRaw ? parseInt(portRaw, 10) : null;
-          return { port: Number.isFinite(port) ? port : null };
-        }
-      }
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
+function normalizePort(rawPort) {
+  if (rawPort === null || rawPort === undefined) return null;
+  const parsed = Number.parseInt(String(rawPort), 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 65535) return null;
+  return parsed;
 }
 
-async function checkDevProcessRunning({ taskPath, port }) {
-  if (port && Number.isFinite(port)) {
-    try {
-      await execFileAsync("bash", ["-lc", `echo >/dev/tcp/127.0.0.1/${port}`], {
-        timeout: 2000,
-        env: tmuxEnv(),
-      });
-      return true;
-    } catch {
-      // fall through to process-path check
+function uniquePorts(ports) {
+  return [...new Set(ports.map(normalizePort).filter((p) => p !== null))];
+}
+
+async function portIsOpen(port) {
+  const normalized = normalizePort(port);
+  if (!normalized) return false;
+
+  try {
+    await execFileAsync("bash", ["-lc", `echo >/dev/tcp/127.0.0.1/${normalized}`], {
+      timeout: 2000,
+      env: tmuxEnv(),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function extractPortsFromText(text) {
+  const rawPorts = [];
+
+  const hostPortPattern = /(?:127\.0\.0\.1|0\.0\.0\.0|localhost):(\d{2,5})/g;
+  const optionPortPattern = /(?:--[a-zA-Z0-9-]*port|port)\s*[:= ]\s*(\d{2,5})/gi;
+  const urlPortPattern = /https?:\/\/[^\s]+:(\d{2,5})/g;
+
+  for (const pattern of [hostPortPattern, optionPortPattern, urlPortPattern]) {
+    for (const match of text.matchAll(pattern)) {
+      if (match[1]) rawPorts.push(match[1]);
+    }
+  }
+
+  return uniquePorts(rawPorts).sort((a, b) => a - b);
+}
+
+async function extractPortsFromTaskScript(taskPath) {
+  if (!taskPath) return [];
+
+  try {
+    const script = await fs.readFile(taskPath, "utf8");
+    return extractPortsFromText(script);
+  } catch {
+    return [];
+  }
+}
+
+function shouldExposeHttp(processName, taskPath = "") {
+  const hints = `${processName || ""} ${taskPath || ""}`.toLowerCase();
+  const infraIndicators = [
+    "temporal",
+    "otel",
+    "collector",
+    "grpc",
+    "postgres",
+    "mysql",
+    "redis",
+    "kafka",
+    "rabbit",
+    "nats",
+    "queue",
+    "worker",
+    "scheduler",
+    "db",
+  ];
+
+  if (infraIndicators.some((term) => hints.includes(term))) {
+    return false;
+  }
+
+  return true;
+}
+
+async function checkDevProcessRunning({ taskPath, port, candidatePorts = [] }) {
+  const portsToCheck = uniquePorts([port, ...candidatePorts]);
+
+  for (const candidate of portsToCheck) {
+    if (await portIsOpen(candidate)) {
+      return { running: true, port: candidate };
     }
   }
 
   if (taskPath) {
     try {
       await execFileAsync("pgrep", ["-f", taskPath], { timeout: 2000, env: tmuxEnv() });
-      return true;
+      return { running: true, port: portsToCheck[0] || null };
     } catch {
-      return false;
+      return { running: false, port: portsToCheck[0] || null };
     }
   }
 
-  return false;
+  return { running: false, port: portsToCheck[0] || null };
 }
 
 async function getTailscaleServeState() {
@@ -244,14 +286,18 @@ async function loadDevServers() {
         [project, portRaw, tsportRaw, legacyPid] = parts;
       }
 
-      const port = portRaw ? parseInt(portRaw, 10) : null;
-      const tsport = tsportRaw ? parseInt(tsportRaw, 10) : null;
+      const port = normalizePort(portRaw);
+      const tsport = normalizePort(tsportRaw);
       const tailscaleActive = tsport ? activeTailscalePorts.has(tsport) : false;
+      const candidatePorts = await extractPortsFromTaskScript(taskPath);
+      const httpExposed = shouldExposeHttp(processName, taskPath);
 
       let running = false;
+      let effectivePort = port;
       if (taskPath) {
-        const meta = await readProjectDevServerMeta(project, processName);
-        running = await checkDevProcessRunning({ taskPath, port: meta?.port || port });
+        const state = await checkDevProcessRunning({ taskPath, port, candidatePorts });
+        running = state.running;
+        effectivePort = state.port || effectivePort;
       } else if (legacyPid) {
         try {
           process.kill(parseInt(legacyPid, 10), 0);
@@ -262,16 +308,25 @@ async function loadDevServers() {
       }
 
       const tailscaleUrl =
-        running && tailscaleActive && tsport ? `https://${publicHost}:${tsport}` : null;
+        running && httpExposed && tailscaleActive && tsport
+          ? `https://${publicHost}:${tsport}`
+          : null;
+
+      const localUrl = effectivePort
+        ? httpExposed
+          ? `http://127.0.0.1:${effectivePort}`
+          : `127.0.0.1:${effectivePort}`
+        : null;
 
       servers.push({
         project,
         process: processName,
-        port,
+        port: effectivePort,
         tsport,
         taskPath: taskPath || null,
         running,
-        localUrl: port ? `http://127.0.0.1:${port}` : null,
+        httpExposed,
+        localUrl,
         tailscaleUrl,
       });
     }
@@ -535,7 +590,10 @@ app.post("/api/dev", async (req) => {
         return { ok: false, error: `unknown action: ${action}` };
     }
   } catch (e) {
-    return { ok: false, error: e.message };
+    const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+    const stdout = typeof e?.stdout === "string" ? e.stdout.trim() : "";
+    const details = stderr || stdout;
+    return { ok: false, error: details || e.message };
   }
 });
 

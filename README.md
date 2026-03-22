@@ -134,12 +134,17 @@ vaibhav dev stop kollywood           # stop all project processes
 ```
 
 Each project should define `processes.<name>.exec` in `devenv.nix` (or
-`devenv.yaml`). Optional per-process metadata can be added in
-`.vaibhav-devservers` at the project root:
+`devenv.yaml`).
+
+By default, `vaibhav` discovers ports from generated devenv process scripts
+and live socket probes, so a separate metadata file is usually not needed.
+
+Optional per-process overrides can be added in `.vaibhav-devservers` at the
+project root:
 
 ```text
 server|4000|http
-otel-collector|4318|http
+otel-collector|4318|nohttp
 temporal-server||nohttp
 ```
 
