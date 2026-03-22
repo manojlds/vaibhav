@@ -121,6 +121,30 @@ vaibhav web opencode stop   # Stop OpenCode Web service
 
 `vaibhav web --url-only` prints the OpenCode URL only (used by setup scripts).
 
+## Dev servers (devenv)
+
+`vaibhav dev` manages per-project dev services using `devenv` processes.
+
+```bash
+vaibhav dev list
+vaibhav dev start kollywood          # start all devenv processes for project
+vaibhav dev start kollywood server   # start one process
+vaibhav dev stop kollywood server    # stop one process
+vaibhav dev stop kollywood           # stop all project processes
+```
+
+Each project should define `processes.<name>.exec` in `devenv.nix` (or
+`devenv.yaml`). Optional per-process metadata can be added in
+`.vaibhav-devservers` at the project root:
+
+```text
+server|4000|http
+otel-collector|4318|http
+temporal-server||nohttp
+```
+
+Fields are `process|port|http_mode` where `http_mode` is `http` or `nohttp`.
+
 ## Ralph loop
 
 vaibhav includes a built-in [Ralph loop](RALPH.md) — an autonomous AI coding loop that works through a PRD, implementing stories one by one.

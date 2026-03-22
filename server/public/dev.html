@@ -23,21 +23,56 @@
     }
     .header a:hover { color: #00d9ff; border-color: #00d9ff; }
 
-    .content { padding: 16px 20px; max-width: 480px; margin: 0 auto; }
+    .content { padding: 16px 20px; max-width: 900px; margin: 0 auto; }
 
     .empty { color: #555; font-size: 14px; text-align: center; margin-top: 40px; }
     .empty code { color: #888; background: #16162a; padding: 2px 8px; border-radius: 4px; font-size: 13px; }
 
     .loading { color: #555; font-size: 14px; text-align: center; margin-top: 40px; }
 
-    .server-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+    .server-list { list-style: none; display: flex; flex-direction: column; gap: 14px; }
+
+    .project-card {
+      background: #141428;
+      border: 1px solid #2a2a4a;
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .project-top {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 10px;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .project-title {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .project-name { font-size: 16px; font-weight: 700; color: #8BE9FD; }
+    .project-meta { color: #666; font-size: 12px; }
+
+    .project-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .project-actions button {
+      background: #1f1f34;
+      border: 1px solid #3a3a5a;
+      color: #d9d9d9;
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .project-actions button:hover { border-color: #00d9ff; color: #00d9ff; }
 
     .server-card {
       background: #16162a;
       border: 1px solid #2a2a4a;
       border-radius: 10px;
-      padding: 16px;
+      padding: 12px;
       transition: border-color .15s;
+      margin-top: 8px;
     }
     .server-card:hover { border-color: #3a3a5a; }
 
@@ -45,7 +80,7 @@
       display: flex; align-items: center; justify-content: space-between;
       margin-bottom: 10px;
     }
-    .server-name { font-weight: 700; font-size: 16px; color: #e0e0e0; }
+    .server-name { font-weight: 700; font-size: 14px; color: #e0e0e0; }
     .server-status {
       font-size: 11px; font-weight: 600; padding: 3px 10px;
       border-radius: 12px; text-transform: uppercase; letter-spacing: 0.03em;
@@ -70,10 +105,10 @@
     .server-actions {
       display: flex; gap: 8px;
       border-top: 1px solid #2a2a4a;
-      padding-top: 12px;
+      padding-top: 10px;
     }
     .server-actions button {
-      flex: 1;
+      flex: 0 0 auto;
       background: #2a2a3e;
       border: 1px solid #3a3a5a;
       color: #e0e0e0;
@@ -84,6 +119,14 @@
       border-radius: 6px;
       cursor: pointer;
       transition: background .15s, border-color .15s, color .15s;
+    }
+
+    .server-empty {
+      color: #666;
+      font-size: 13px;
+      padding: 8px 2px;
+      border-top: 1px dashed #2a2a4a;
+      margin-top: 8px;
     }
     .server-actions button:hover { border-color: #00d9ff; color: #00d9ff; }
     .server-actions button:active { background: #3a3a5a; }
@@ -116,10 +159,10 @@
   <div class="content">
     <div class="loading" id="loading">Loading...</div>
     <ul class="server-list" id="server-list" style="display:none"></ul>
-    <div class="empty" id="empty" style="display:none">
-      No dev servers registered.<br><br>
-      Start one with<br><code>vaibhav dev start &lt;project&gt;</code>
-    </div>
+      <div class="empty" id="empty" style="display:none">
+      No projects found.<br><br>
+      Register one with<br><code>vaibhav add &lt;name&gt; &lt;path&gt;</code>
+      </div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -131,17 +174,71 @@
     const $toast = document.getElementById('toast');
     let toastTimer = null;
 
-    function showToast(msg, type = '') {
+    function showToast(msg, type = '', sticky = false) {
       clearTimeout(toastTimer);
       $toast.textContent = msg;
       $toast.className = 'toast visible ' + type;
-      toastTimer = setTimeout(() => { $toast.className = 'toast'; }, 3000);
+      if (!sticky) {
+        toastTimer = setTimeout(() => { $toast.className = 'toast'; }, 3000);
+      }
     }
 
-    function renderServers(servers) {
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function fetchStatus() {
+      const res = await fetch(`/api/status?_=${Date.now()}`, { cache: 'no-store' });
+      return res.json();
+    }
+
+    function matchesExpectedState(data, project, process, expectedRunning) {
+      const servers = (data.devServers || []).filter(s => s.project === project && (!process || s.process === process));
+
+      if (servers.length === 0) {
+        return expectedRunning === false;
+      }
+
+      return expectedRunning
+        ? servers.every(s => s.running)
+        : servers.every(s => !s.running);
+    }
+
+    async function pollUntilState(project, process, expectedRunning) {
+      const timeoutMs = expectedRunning ? 120000 : 30000;
+      const intervalMs = 1000;
+      const startedAt = Date.now();
+
+      while ((Date.now() - startedAt) < timeoutMs) {
+        try {
+          const data = await fetchStatus();
+          renderServers(data.devServers || [], data.projects || []);
+          if (matchesExpectedState(data, project, process, expectedRunning)) {
+            return true;
+          }
+        } catch {
+          // keep polling
+        }
+        await sleep(intervalMs);
+      }
+
+      return false;
+    }
+
+    function renderServers(servers, projects) {
       $loading.style.display = 'none';
 
-      if (!servers || servers.length === 0) {
+      const projectNames = Array.from(new Set([
+        ...(projects || []).map(p => p.name),
+        ...(servers || []).map(s => s.project),
+      ])).sort((a, b) => {
+        const aRunning = (servers || []).filter(s => s.project === a && s.running).length;
+        const bRunning = (servers || []).filter(s => s.project === b && s.running).length;
+        if (aRunning !== bRunning) return bRunning - aRunning;
+        return a.localeCompare(b);
+      });
+
+      if (projectNames.length === 0) {
         $list.style.display = 'none';
         $empty.style.display = 'block';
         return;
@@ -151,32 +248,60 @@
       $list.style.display = 'flex';
       $list.innerHTML = '';
 
-      servers.forEach(ds => {
+      projectNames.forEach(project => {
+        const projectServers = (servers || [])
+          .filter(s => s.project === project)
+          .sort((a, b) => {
+            if (a.running !== b.running) return a.running ? -1 : 1;
+            return (a.process || '').localeCompare(b.process || '');
+          });
+        const runningCount = projectServers.filter(s => s.running).length;
+
         const li = document.createElement('li');
         li.innerHTML = `
-          <div class="server-card">
-            <div class="server-top">
-              <span class="server-name">${ds.project}</span>
-              <span class="server-status ${ds.running ? 'running' : 'stopped'}">${ds.running ? 'Running' : 'Stopped'}</span>
+          <div class="project-card">
+            <div class="project-top">
+              <div class="project-title">
+                <span class="project-name">${project}</span>
+                <span class="project-meta">${runningCount}/${projectServers.length} running</span>
+              </div>
+              <div class="project-actions">
+                <button data-target="${project}::all" onclick="devAction('start', '${project}', '')">Start all</button>
+                <button data-target="${project}::all" onclick="devAction('restart', '${project}', '')">Restart all</button>
+                <button data-target="${project}::all" onclick="devAction('stop', '${project}', '')">Stop all</button>
+              </div>
             </div>
-            <div class="server-urls">
+
+            ${projectServers.length > 0 ? projectServers.map(ds => `
+            <div class="server-card">
+              <div class="server-top">
+                <span class="server-name">${ds.process}</span>
+                <span class="server-status ${ds.running ? 'running' : 'stopped'}">${ds.running ? 'Running' : 'Stopped'}</span>
+              </div>
+              <div class="server-urls">
               <div class="server-url">
                 <span class="label">Local</span>
-                <span class="port">${ds.localUrl}</span>
+                <span class="port">${ds.localUrl || 'n/a'}</span>
               </div>
               <div class="server-url">
                 <span class="label">Public</span>
-                <a href="${ds.tailscaleUrl}" target="_blank">${ds.tailscaleUrl}</a>
+                ${ds.tailscaleUrl ? `<a href="${ds.tailscaleUrl}" target="_blank">${ds.tailscaleUrl}</a>` : '<span class="port">n/a</span>'}
+              </div>
+              </div>
+              <div class="server-actions">
+                <button class="open" onclick="${ds.tailscaleUrl ? `window.open('${ds.tailscaleUrl}', '_blank')` : 'void(0)'}" ${!ds.running || !ds.tailscaleUrl ? 'disabled' : ''}>Open</button>
+                <button class="restart" data-target="${project}::${ds.process}" onclick="devAction('restart', '${project}', '${ds.process}')">Restart</button>
+                <button class="${ds.running ? 'stop' : 'start'}" data-target="${project}::${ds.process}"
+                  onclick="devAction('${ds.running ? 'stop' : 'start'}', '${project}', '${ds.process}')">
+                  ${ds.running ? 'Stop' : 'Start'}
+                </button>
               </div>
             </div>
-            <div class="server-actions">
-              <button class="open" onclick="window.open('${ds.tailscaleUrl}', '_blank')" ${!ds.running ? 'disabled' : ''}>Open</button>
-              <button class="restart" data-project="${ds.project}" onclick="devAction('restart', '${ds.project}')">Restart</button>
-              <button class="${ds.running ? 'stop' : 'start'}" data-project="${ds.project}"
-                onclick="devAction('${ds.running ? 'stop' : 'start'}', '${ds.project}')">
-                ${ds.running ? 'Stop' : 'Start'}
-              </button>
+            `).join('') : `
+            <div class="server-empty">
+              No registered devenv processes yet. Start once with <code>vaibhav dev start ${project}</code>
             </div>
+            `}
           </div>`;
         $list.appendChild(li);
       });
@@ -184,9 +309,8 @@
 
     async function loadServers() {
       try {
-        const res = await fetch('/api/status');
-        const data = await res.json();
-        renderServers(data.devServers || []);
+        const data = await fetchStatus();
+        renderServers(data.devServers || [], data.projects || []);
       } catch (e) {
         $loading.style.display = 'none';
         $empty.style.display = 'block';
@@ -194,33 +318,54 @@
       }
     }
 
-    async function devAction(action, project) {
-      const btns = document.querySelectorAll(`button[data-project="${project}"]`);
+    async function devAction(action, project, process) {
+      const target = `${project}::${process || 'all'}`;
+      const btns = document.querySelectorAll(`button[data-target="${target}"]`);
       btns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
-      showToast(`${action === 'stop' ? 'Stopping' : action === 'start' ? 'Starting' : 'Restarting'} ${project}...`);
+      const label = process ? `${project}/${process}` : `${project} (all)`;
+      const verb = action === 'stop' ? 'Stopping' : action === 'start' ? 'Starting' : 'Restarting';
+      showToast(`${verb} ${label}...`, '', true);
 
       try {
         const res = await fetch('/api/dev', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action, project }),
+          body: JSON.stringify({ action, project, process }),
         });
         const data = await res.json();
         if (data.ok) {
-          showToast(`${project} ${action === 'stop' ? 'stopped' : action === 'start' ? 'started' : 'restarted'}`, 'success');
+          const expectedRunning = action !== 'stop';
+          showToast(
+            `Waiting for ${label} to ${expectedRunning ? 'be ready' : 'stop'}...`,
+            '',
+            true,
+          );
+
+          const reached = await pollUntilState(project, process, expectedRunning);
+          if (reached) {
+            showToast(
+              `${label} ${expectedRunning ? 'running' : 'stopped'}`,
+              'success',
+            );
+          } else {
+            showToast(
+              `${label} is still ${expectedRunning ? 'starting' : 'stopping'} (timed out)` ,
+              'error',
+            );
+          }
         } else {
           showToast(data.error || 'Action failed', 'error');
         }
       } catch (e) {
         showToast('Request failed', 'error');
+      } finally {
+        btns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
       }
 
-      // Reload after a delay to let process-compose settle
-      setTimeout(loadServers, action === 'stop' ? 1000 : 3000);
+      setTimeout(loadServers, 300);
     }
 
     loadServers();
-    // Auto-refresh every 10s
     setInterval(loadServers, 10000);
   </script>
 </body>

@@ -21,7 +21,7 @@
 <div class="links">
   <a class="card" href="/dev">
     <div class="label">🚀 Dev Servers</div>
-    <div class="desc" id="dev-desc">Manage project dev servers via process-compose</div>
+    <div class="desc" id="dev-desc">Manage project devenv processes</div>
   </a>
   <a class="card" href="/terminal">
     <div class="label">🖥️ Terminal</div>
@@ -48,11 +48,16 @@
     const data = await res.json();
     const servers = data.devServers || [];
     const running = servers.filter(s => s.running).length;
+    const projects = new Set(servers.map(s => s.project));
     if (servers.length > 0) {
-      const names = servers.filter(s => s.running).map(s => s.project).join(", ");
+      const names = servers
+        .filter(s => s.running)
+        .map(s => `${s.project}/${s.process || 'server'}`)
+        .slice(0, 3)
+        .join(", ");
       document.getElementById("dev-desc").textContent = running > 0
-        ? `${running} running: ${names}`
-        : `${servers.length} registered, none running`;
+        ? `${running} running across ${projects.size} projects${names ? `: ${names}` : ''}`
+        : `${servers.length} registered process entries, none running`;
     }
   } catch(e) {}
 })();

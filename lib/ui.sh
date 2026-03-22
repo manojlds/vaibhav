@@ -33,7 +33,7 @@ show_usage() {
     echo "  vaibhav remove <name>       Unregister a project"
     echo "  vaibhav scan [dir]          Auto-register projects under a directory"
     echo "  vaibhav share [file] [dir]  Share files (copy to ~/vaibhav-share, list shared files)"
-    echo "  vaibhav dev [cmd] [project] Manage dev servers (start, stop, list, restart)"
+    echo "  vaibhav dev [cmd] [project] Manage devenv processes (start, stop, list, restart)"
     echo "  vaibhav web                 Show/manage OpenCode Web + Files services"
     echo "  vaibhav doctor              Check SSH routing (LAN vs Tailscale)"
     echo "  vaibhav refresh             Detect desktop LAN IP and save it to config"

@@ -77,9 +77,17 @@ const DEVSERVERS_FILE = path.join(
 );
 
 function tmuxEnv() {
+  const pathParts = [
+    path.join(homedir(), ".nix-profile", "bin"),
+    "/nix/var/nix/profiles/default/bin",
+    path.join(homedir(), "bin"),
+    path.join(homedir(), ".cargo", "bin"),
+    process.env.PATH || "",
+  ];
+
   return {
     ...process.env,
-    PATH: `${path.join(homedir(), "bin")}:${path.join(homedir(), ".cargo", "bin")}:${process.env.PATH}`,
+    PATH: pathParts.join(":"),
   };
 }
 
@@ -106,30 +114,169 @@ async function loadProjects() {
   }
 }
 
+async function readProjectDevServerMeta(projectName, processName) {
+  const projects = await loadProjects();
+  const proj = projects.find((p) => p.name === projectName);
+  if (!proj) return null;
+
+  const metaFile = path.join(proj.path, ".vaibhav-devservers");
+  try {
+    const content = await fs.readFile(metaFile, "utf8");
+    for (const rawLine of content.split("\n")) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+
+      if (line.includes("|")) {
+        const [name, portRaw] = line.split("|");
+        if (name === processName) {
+          const port = portRaw ? parseInt(portRaw, 10) : null;
+          return { port: Number.isFinite(port) ? port : null };
+        }
+      } else if (line.includes("=")) {
+        const [name, portRaw] = line.split("=");
+        if (name === processName) {
+          const port = portRaw ? parseInt(portRaw, 10) : null;
+          return { port: Number.isFinite(port) ? port : null };
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+async function checkDevProcessRunning({ taskPath, port }) {
+  if (port && Number.isFinite(port)) {
+    try {
+      await execFileAsync("bash", ["-lc", `echo >/dev/tcp/127.0.0.1/${port}`], {
+        timeout: 2000,
+        env: tmuxEnv(),
+      });
+      return true;
+    } catch {
+      // fall through to process-path check
+    }
+  }
+
+  if (taskPath) {
+    try {
+      await execFileAsync("pgrep", ["-f", taskPath], { timeout: 2000, env: tmuxEnv() });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+async function getTailscaleServeState() {
+  const ports = new Set();
+  let dnsName = null;
+
+  try {
+    const { stdout } = await execFileAsync("tailscale", ["serve", "status"], {
+      timeout: 3000,
+      env: tmuxEnv(),
+    });
+
+    for (const line of stdout.split("\n")) {
+      const portMatch = line.match(/\.ts\.net:(\d{2,5})/);
+      if (portMatch) {
+        ports.add(parseInt(portMatch[1], 10));
+      }
+
+      if (!dnsName) {
+        const dnsMatch = line.match(/([a-z0-9.-]+\.ts\.net)/i);
+        if (dnsMatch) {
+          dnsName = dnsMatch[1];
+        }
+      }
+    }
+  } catch {
+    // ignore; we still try to infer DNS name from tailscale status
+  }
+
+  if (!dnsName) {
+    try {
+      const { stdout } = await execFileAsync("tailscale", ["status", "--json"], {
+        timeout: 3000,
+        env: tmuxEnv(),
+      });
+      const status = JSON.parse(stdout);
+      dnsName = status?.Self?.DNSName?.replace(/\.$/, "") || null;
+    } catch {
+      dnsName = null;
+    }
+  }
+
+  return { ports, dnsName };
+}
+
 async function loadDevServers() {
   try {
     const content = await fs.readFile(DEVSERVERS_FILE, "utf8");
     const hostname = (await execFileAsync("hostname")).stdout.trim();
-    return content
-      .split("\n")
-      .filter((l) => l.trim())
-      .map((l) => {
-        const [project, port, tsport, pid] = l.split("|");
-        let running = false;
+    const { ports: activeTailscalePorts, dnsName: tailscaleDnsName } =
+      await getTailscaleServeState();
+    const publicHost = tailscaleDnsName || `${hostname}.tail0b43a9.ts.net`;
+    const servers = [];
+
+    for (const rawLine of content.split("\n")) {
+      const line = rawLine.trim();
+      if (!line) continue;
+
+      const parts = line.split("|");
+      let project = "";
+      let processName = "server";
+      let portRaw = "";
+      let tsportRaw = "";
+      let taskPath = "";
+      let legacyPid = "";
+
+      // New schema: project|process|port|tsport|task_path
+      if (parts.length >= 5) {
+        [project, processName, portRaw, tsportRaw, taskPath] = parts;
+      } else {
+        // Legacy schema: project|port|tsport|pid
+        [project, portRaw, tsportRaw, legacyPid] = parts;
+      }
+
+      const port = portRaw ? parseInt(portRaw, 10) : null;
+      const tsport = tsportRaw ? parseInt(tsportRaw, 10) : null;
+      const tailscaleActive = tsport ? activeTailscalePorts.has(tsport) : false;
+
+      let running = false;
+      if (taskPath) {
+        const meta = await readProjectDevServerMeta(project, processName);
+        running = await checkDevProcessRunning({ taskPath, port: meta?.port || port });
+      } else if (legacyPid) {
         try {
-          if (pid) process.kill(parseInt(pid), 0);
+          process.kill(parseInt(legacyPid, 10), 0);
           running = true;
-        } catch {}
-        return {
-          project,
-          port: parseInt(port),
-          tsport: parseInt(tsport),
-          pid: pid ? parseInt(pid) : null,
-          running,
-          localUrl: `http://127.0.0.1:${port}`,
-          tailscaleUrl: `https://${hostname}.tail0b43a9.ts.net:${tsport}`,
-        };
+        } catch {
+          running = false;
+        }
+      }
+
+      const tailscaleUrl =
+        running && tailscaleActive && tsport ? `https://${publicHost}:${tsport}` : null;
+
+      servers.push({
+        project,
+        process: processName,
+        port,
+        tsport,
+        taskPath: taskPath || null,
+        running,
+        localUrl: port ? `http://127.0.0.1:${port}` : null,
+        tailscaleUrl,
       });
+    }
+
+    return servers;
   } catch {
     return [];
   }
@@ -220,7 +367,10 @@ app.post("/api/kill", async (req) => {
     }
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: e.message };
+    const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+    const stdout = typeof e?.stdout === "string" ? e.stdout.trim() : "";
+    const details = stderr || stdout;
+    return { ok: false, error: details || e.message };
   }
 });
 
@@ -300,7 +450,10 @@ app.post("/api/open", async (req) => {
     }
     return { ok: true, session: project };
   } catch (e) {
-    return { ok: false, error: e.message };
+    const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+    const stdout = typeof e?.stdout === "string" ? e.stdout.trim() : "";
+    const details = stderr || stdout;
+    return { ok: false, error: details || e.message };
   }
 });
 
@@ -355,7 +508,7 @@ app.get("/dev", async (req, reply) => {
 
 // --- Dev server management API ---
 app.post("/api/dev", async (req) => {
-  const { action = "", project = "" } = req.body || {};
+  const { action = "", project = "", process = "" } = req.body || {};
   if (!action || !project) return { ok: false, error: "action and project required" };
 
   const projects = await loadProjects();
@@ -365,15 +518,18 @@ app.post("/api/dev", async (req) => {
   const vaibhavBin = path.join(homedir(), "projects", "vaibhav", "bin", "vaibhav");
 
   try {
+    const args = [vaibhavBin, "dev", action, project];
+    if (process) args.push(process);
+
     switch (action) {
       case "stop":
-        await execFileAsync("bash", [vaibhavBin, "dev", "stop", project], { timeout: 15000, env: tmuxEnv() });
+        await execFileAsync("bash", args, { timeout: 30000, env: tmuxEnv() });
         return { ok: true };
       case "start":
-        await execFileAsync("bash", [vaibhavBin, "dev", "start", project], { timeout: 30000, env: tmuxEnv() });
+        await execFileAsync("bash", args, { timeout: 180000, env: tmuxEnv() });
         return { ok: true };
       case "restart":
-        await execFileAsync("bash", [vaibhavBin, "dev", "restart", project], { timeout: 30000, env: tmuxEnv() });
+        await execFileAsync("bash", args, { timeout: 180000, env: tmuxEnv() });
         return { ok: true };
       default:
         return { ok: false, error: `unknown action: ${action}` };

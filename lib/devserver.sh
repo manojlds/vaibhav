@@ -1,206 +1,576 @@
 # shellcheck shell=bash
-# vaibhav/lib/devserver.sh — Dev server management via process-compose + tailscale serve
+# vaibhav/lib/devserver.sh — Dev server management via devenv + tailscale serve
 
 DEVSERVERS_FILE="$CONFIG_DIR/devservers"
 DEVSERVER_TS_PORT_START=10443
+
+# Optional per-project process metadata file.
+# Format (either style):
+#   process|port|http
+#   process=port
+#
+# Example:
+#   server|4000|http
+#   otel-collector|4318|http
+#   temporal-server||nohttp
 
 # --- Helpers ---
 
 _ds_ensure_file() {
     touch "$DEVSERVERS_FILE"
+    _ds_migrate_registry_schema
 }
 
-# Get a devserver field: _ds_get <project> <field>
-# Fields: port, tsport, pid
-_ds_get() {
-    local project="$1" field="$2"
-    grep "^${project}|" "$DEVSERVERS_FILE" 2>/dev/null | head -1 | cut -d'|' -f"$(_ds_field_index "$field")"
+_ds_migrate_registry_schema() {
+    # Migrate legacy schema:
+    #   project|port|tsport|pid
+    # to new schema:
+    #   project|process|port|tsport|task_path
+    [[ -s "$DEVSERVERS_FILE" ]] || return 0
+
+    local tmp_file
+    tmp_file="${DEVSERVERS_FILE}.tmp"
+    : >"$tmp_file"
+
+    local changed=false
+    while IFS='|' read -r f1 f2 f3 f4 f5 rest; do
+        [[ -z "$f1" ]] && continue
+
+        if [[ -n "$f5" || -n "$rest" ]]; then
+            echo "${f1}|${f2}|${f3}|${f4}|${f5}" >>"$tmp_file"
+            continue
+        fi
+
+        # Legacy row with 4 columns.
+        if [[ -n "$f4" ]]; then
+            changed=true
+            echo "${f1}|server|${f2}|${f3}|" >>"$tmp_file"
+            continue
+        fi
+
+        # Unknown shape, keep as-is with padded fields.
+        echo "${f1}|${f2}|${f3}|${f4}|${f5}" >>"$tmp_file"
+    done <"$DEVSERVERS_FILE"
+
+    if [[ "$changed" == "true" ]]; then
+        mv "$tmp_file" "$DEVSERVERS_FILE"
+    else
+        rm -f "$tmp_file"
+    fi
 }
 
-_ds_field_index() {
-    case "$1" in
-        project) echo 1 ;;
-        port)    echo 2 ;;
-        tsport)  echo 3 ;;
-        pid)     echo 4 ;;
-    esac
+_ds_project_meta_file() {
+    local project_path="$1"
+    echo "$project_path/.vaibhav-devservers"
 }
 
-# Find the next available tailscale serve port
+_ds_is_registered_project() {
+    local name="$1"
+    [[ -n "$(get_project_path "$name")" ]]
+}
+
+_ds_has_devenv() {
+    local project_path="$1"
+    [[ -f "$project_path/devenv.nix" || -f "$project_path/devenv.yaml" ]]
+}
+
+_ds_resolve_project_context() {
+    # Usage: _ds_resolve_project_context <arg1> <arg2>
+    # Prints: project|project_path|process
+    local arg1="${1:-}"
+    local arg2="${2:-}"
+    local project=""
+    local project_path=""
+    local process=""
+
+    if [[ -z "$arg1" ]]; then
+        project="$(basename "$PWD")"
+        project_path="$PWD"
+        process="$arg2"
+        echo "$project|$project_path|$process"
+        return
+    fi
+
+    if _ds_is_registered_project "$arg1"; then
+        project="$arg1"
+        project_path="$(get_project_path "$project")"
+        process="$arg2"
+        echo "$project|$project_path|$process"
+        return
+    fi
+
+    # If current directory is a project with devenv, treat arg1 as process name.
+    if _ds_has_devenv "$PWD"; then
+        project="$(basename "$PWD")"
+        project_path="$PWD"
+        process="$arg1"
+        echo "$project|$project_path|$process"
+        return
+    fi
+
+    # Fall back: treat arg1 as project name even if not registered.
+    project="$arg1"
+    project_path="$PWD"
+    process="$arg2"
+    echo "$project|$project_path|$process"
+}
+
 _ds_next_tsport() {
     local port=$DEVSERVER_TS_PORT_START
-    while grep -q "|${port}|" "$DEVSERVERS_FILE" 2>/dev/null; do
+    while awk -F'|' -v p="$port" '$4==p {found=1} END {exit !found}' "$DEVSERVERS_FILE" 2>/dev/null; do
         port=$((port + 1))
     done
     echo "$port"
 }
 
-# Detect port from process-compose.yaml
-_ds_detect_port() {
-    local project_path="$1"
-    local pc_file="$project_path/process-compose.yaml"
-    local port=""
+_ds_remove_entry() {
+    local project="$1" process="$2"
+    sed -i "/^${project}|${process}|/d" "$DEVSERVERS_FILE"
+}
 
-    if [[ -f "$pc_file" ]]; then
-        # Try readiness_probe.http_get.port first
-        port=$(grep -A5 'http_get:' "$pc_file" 2>/dev/null | grep 'port:' | head -1 | awk '{print $2}')
+_ds_process_running() {
+    local task_path="$1" port="${2:-}"
 
-        # Fall back to x-port top-level annotation
-        if [[ -z "$port" ]]; then
-            port=$(grep '^x-port:' "$pc_file" 2>/dev/null | awk '{print $2}')
+    if [[ -n "$port" ]]; then
+        if (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
+            return 0
         fi
     fi
 
+    [[ -n "$task_path" ]] && pgrep -f "$task_path" >/dev/null 2>&1
+}
+
+_ds_extract_devenv_metadata() {
+    # Emits lines in format:
+    #   PROC|<process>|<exec_path>
+    #   TASK|<process>|<task_path>
+    local project_path="$1"
+    local info
+    if ! info="$(cd "$project_path" && devenv info 2>/dev/null)"; then
+        return 1
+    fi
+
+    local mode=""
+    while IFS= read -r line; do
+        case "$line" in
+            "# processes")
+                mode="processes"
+                continue
+                ;;
+            "# tasks")
+                mode="tasks"
+                continue
+                ;;
+            "# "*)
+                mode=""
+                ;;
+        esac
+
+        if [[ "$mode" == "processes" ]]; then
+            if [[ "$line" =~ ^-\ ([^:]+):\ exec\ (.+)$ ]]; then
+                echo "PROC|${BASH_REMATCH[1]}|${BASH_REMATCH[2]}"
+            fi
+        elif [[ "$mode" == "tasks" ]]; then
+            if [[ "$line" == "- devenv:processes:"* ]]; then
+                local task_name task_path
+                task_name="$(echo "$line" | sed -n 's/^- devenv:processes:\([^:]*\):.*$/\1/p')"
+                task_path="$(echo "$line" | sed -n 's/^.*(\(.*\))$/\1/p')"
+                if [[ -n "$task_name" && -n "$task_path" ]]; then
+                    echo "TASK|${task_name}|${task_path}"
+                fi
+            fi
+        fi
+    done <<<"$info"
+}
+
+_ds_process_port_from_meta() {
+    local project_path="$1" process="$2"
+    local meta_file
+    meta_file="$(_ds_project_meta_file "$project_path")"
+    [[ -f "$meta_file" ]] || return 0
+
+    local line
+    line="$(grep "^${process}[|=]" "$meta_file" 2>/dev/null | head -1 || true)"
+    [[ -n "$line" ]] || return 0
+
+    if [[ "$line" == *"|"* ]]; then
+        echo "$line" | cut -d'|' -f2
+    else
+        echo "$line" | cut -d'=' -f2
+    fi
+}
+
+_ds_process_http_mode_from_meta() {
+    local project_path="$1" process="$2"
+    local meta_file
+    meta_file="$(_ds_project_meta_file "$project_path")"
+    [[ -f "$meta_file" ]] || return 0
+
+    local line
+    line="$(grep "^${process}[|=]" "$meta_file" 2>/dev/null | head -1 || true)"
+    [[ -n "$line" ]] || return 0
+
+    if [[ "$line" == *"|"* ]]; then
+        echo "$line" | cut -d'|' -f3
+    fi
+}
+
+_ds_detect_port_from_task_script() {
+    local task_path="$1"
+    [[ -f "$task_path" ]] || return 0
+
+    local port=""
+    port="$(grep -Eo '(127\.0\.0\.1|0\.0\.0\.0|localhost):[0-9]{2,5}' "$task_path" 2>/dev/null | head -1 | grep -Eo '[0-9]{2,5}' || true)"
+    if [[ -z "$port" ]]; then
+        port="$(grep -Eo 'port[[:space:]]*[:=][[:space:]]*[0-9]{2,5}' "$task_path" 2>/dev/null | head -1 | grep -Eo '[0-9]{2,5}' || true)"
+    fi
     echo "$port"
 }
 
-# Check if a process-compose is running for a project
-_ds_is_running() {
-    local project="$1"
-    local pid
-    pid=$(_ds_get "$project" "pid")
-    [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+_ds_should_expose_http() {
+    local process="$1" mode="${2:-}"
+
+    case "$mode" in
+        http|true|yes|1)
+            return 0
+            ;;
+        nohttp|false|no|0)
+            return 1
+            ;;
+    esac
+
+    # Heuristic defaults when no explicit metadata is provided.
+    case "$process" in
+        *temporal*|*postgres*|*mysql*|*redis*|*kafka*|*rabbit*|*db*|*queue*)
+            return 1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+_ds_get_registry_entry() {
+    local project="$1" process="$2"
+    grep "^${project}|${process}|" "$DEVSERVERS_FILE" 2>/dev/null | head -1 || true
+}
+
+_ds_register_process_entry() {
+    local project="$1" process="$2" port="$3" tsport="$4" task_path="$5"
+    _ds_remove_entry "$project" "$process"
+    echo "${project}|${process}|${port}|${tsport}|${task_path}" >> "$DEVSERVERS_FILE"
+}
+
+_ds_tailscale_on() {
+    local tsport="$1" port="$2"
+    if ! tailscale serve --bg --yes --https "$tsport" "http://127.0.0.1:${port}" >/dev/null 2>&1; then
+        tailscale serve --bg --https "$tsport" "http://127.0.0.1:${port}" >/dev/null 2>&1 || return 1
+    fi
+    _ds_tailscale_is_active "$tsport"
+}
+
+_ds_tailscale_off() {
+    local tsport="$1"
+    [[ -n "$tsport" ]] || return 0
+    tailscale serve --https "$tsport" off >/dev/null 2>&1 || true
+    if _ds_tailscale_is_active "$tsport"; then
+        sleep 1
+        tailscale serve --https "$tsport" off >/dev/null 2>&1 || true
+    fi
+}
+
+_ds_tailscale_is_active() {
+    local tsport="$1"
+    [[ -n "$tsport" ]] || return 1
+    tailscale serve status 2>/dev/null | grep -Eq "\.ts\.net:${tsport}([^0-9]|$)"
+}
+
+_ds_stop_process_by_task_path() {
+    local task_path="$1"
+    [[ -n "$task_path" ]] || return 0
+    local pids
+    pids="$(pgrep -f "$task_path" 2>/dev/null || true)"
+    [[ -n "$pids" ]] || return 0
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+}
+
+_ds_stop_process_by_port() {
+    local port="$1"
+    [[ -n "$port" ]] || return 0
+
+    local pids
+    pids="$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    [[ -n "$pids" ]] || return 0
+
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+    sleep 1
+    pids="$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    if [[ -n "$pids" ]]; then
+        # shellcheck disable=SC2086
+        kill -9 $pids 2>/dev/null || true
+    fi
+}
+
+_ds_stop_devenv_up_launcher() {
+    local project_path="$1" process="$2"
+    [[ -n "$project_path" && -n "$process" ]] || return 0
+
+    local pids
+    pids="$(pgrep -f "devenv up --no-tui ${process}" 2>/dev/null || true)"
+    [[ -n "$pids" ]] || return 0
+
+    local pid cwd
+    for pid in $pids; do
+        cwd="$(readlink "/proc/${pid}/cwd" 2>/dev/null || true)"
+        [[ "$cwd" == "$project_path" ]] || continue
+        kill "$pid" 2>/dev/null || true
+    done
 }
 
 # --- Commands ---
 
 dev_start() {
-    local project="${1:-}"
-    local project_path=""
+    local arg1="${1:-}" arg2="${2:-}"
+    local resolved project project_path process
 
     _ds_ensure_file
 
-    # Resolve project
-    if [[ -z "$project" ]]; then
-        # Try current directory
-        project=$(basename "$PWD")
-        project_path="$PWD"
-    else
-        project_path=$(get_project_path "$project")
-    fi
+    resolved="$(_ds_resolve_project_context "$arg1" "$arg2")"
+    IFS='|' read -r project project_path process <<<"$resolved"
 
-    if [[ -z "$project_path" ]]; then
-        echo -e "${RED}Error:${NC} Project '${project}' not found in vaibhav projects"
-        exit 1
-    fi
-
-    if [[ ! -f "$project_path/process-compose.yaml" ]]; then
-        echo -e "${RED}Error:${NC} No process-compose.yaml found in ${project_path}"
-        echo -e "${DIM}Create one first. Example:${NC}"
-        echo ""
-        echo "  version: \"0.5\""
-        echo "  processes:"
-        echo "    server:"
-        echo "      command: mix phx.server"
-        echo "      readiness_probe:"
-        echo "        http_get:"
-        echo "          port: 4000"
-        exit 1
-    fi
-
-    if _ds_is_running "$project"; then
-        echo -e "${YELLOW}Already running:${NC} ${CYAN}${project}${NC}"
-        local tsport
-        tsport=$(_ds_get "$project" "tsport")
-        echo -e "  ${DIM}Tailscale:${NC} https://$(hostname).tail0b43a9.ts.net:${tsport}"
-        return
-    fi
-
-    # Detect port
-    local port
-    port=$(_ds_detect_port "$project_path")
-    if [[ -z "$port" ]]; then
-        echo -e "${RED}Error:${NC} Could not detect port from process-compose.yaml"
-        echo -e "${DIM}Add a readiness_probe.http_get.port to your process config${NC}"
-        exit 1
-    fi
-
-    # Get tailscale serve port
-    local tsport
-    tsport=$(_ds_next_tsport)
-
-    step "Starting dev server for ${project}"
-
-    # Start process-compose in daemon mode (-D forks and exits)
-    # Run from project dir so working_dir and mise .mise.toml resolve correctly
-    # Note: process-compose -D may exit with non-zero even on success
-    (set +e; cd "$project_path" && \
-        process-compose up -D --tui=false > .process-compose.log 2>&1) || true
-
-    # Give the daemon a moment to start
-    sleep 1
-
-    # Find the daemon PID from the unix socket file
-    local daemon_pid=""
-    local sock_file=""
-    sock_file=$(find /tmp -maxdepth 1 -name 'process-compose-*.sock' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2) || true
-    if [[ -n "$sock_file" ]]; then
-        # Extract PID from socket filename: /tmp/process-compose-<PID>.sock
-        daemon_pid=$(basename "$sock_file" | sed 's/process-compose-//;s/\.sock//')
-    fi
-    if [[ -z "$daemon_pid" ]] || ! kill -0 "$daemon_pid" 2>/dev/null; then
-        daemon_pid=$(pgrep -n -f "process-compose" 2>/dev/null) || true
-    fi
-    if [[ -z "$daemon_pid" ]]; then
-        echo -e "${YELLOW}Warning:${NC} Could not find process-compose daemon PID, registering without it"
-        daemon_pid="0"
-    fi
-
-    # Set up tailscale serve
-    tailscale serve --bg --https "$tsport" "http://127.0.0.1:${port}" 2>/dev/null || {
-        echo -e "${RED}Error:${NC} Failed to set up tailscale serve on port ${tsport}"
+    if [[ -z "$project_path" ]] || [[ ! -d "$project_path" ]]; then
+        echo -e "${RED}Error:${NC} Project path not found for '${project}'"
         return 1
-    }
+    fi
 
-    # Remove old entry if exists, add new
-    sed -i "/^${project}|/d" "$DEVSERVERS_FILE"
-    echo "${project}|${port}|${tsport}|${daemon_pid}" >> "$DEVSERVERS_FILE"
+    if ! _ds_has_devenv "$project_path"; then
+        echo -e "${RED}Error:${NC} No devenv.nix/devenv.yaml found in ${project_path}"
+        echo -e "${DIM}Initialize devenv first (e.g. devenv init), then define processes.<name>.exec${NC}"
+        return 1
+    fi
 
-    ok "process-compose started (pid: ${daemon_pid})"
-    ok "Local: http://127.0.0.1:${port}"
-    ok "Tailscale: https://$(hostname).tail0b43a9.ts.net:${tsport}"
+    local metadata
+    if ! metadata="$(_ds_extract_devenv_metadata "$project_path")"; then
+        echo -e "${RED}Error:${NC} Failed to read devenv process metadata for ${project}"
+        return 1
+    fi
+
+    declare -A task_path_by_process=()
+    declare -A exec_path_by_process=()
+    declare -a processes=()
+    while IFS='|' read -r kind name path; do
+        [[ -z "$kind" ]] && continue
+        if [[ "$kind" == "PROC" ]]; then
+            processes+=("$name")
+            exec_path_by_process["$name"]="$path"
+        elif [[ "$kind" == "TASK" ]]; then
+            task_path_by_process["$name"]="$path"
+        fi
+    done <<<"$metadata"
+
+    if [[ ${#processes[@]} -eq 0 ]]; then
+        echo -e "${RED}Error:${NC} No processes found in devenv config for ${project}"
+        return 1
+    fi
+
+    declare -a selected=()
+    if [[ -n "$process" ]]; then
+        local found=false
+        for name in "${processes[@]}"; do
+            if [[ "$name" == "$process" ]]; then
+                found=true
+                selected+=("$name")
+                break
+            fi
+        done
+        if [[ "$found" == "false" ]]; then
+            echo -e "${RED}Error:${NC} Process '${process}' not found in ${project}"
+            echo -e "${DIM}Available:${NC} ${processes[*]}"
+            return 1
+        fi
+    else
+        selected=("${processes[@]}")
+    fi
+
+    step "Starting devenv process(es) for ${project}: ${selected[*]}"
+    if ! (cd "$project_path" && devenv processes up --detach --no-tui "${selected[@]}"); then
+        echo -e "${RED}Error:${NC} Failed to start devenv process(es)"
+        return 1
+    fi
+
+    local name task_path port tsport http_mode
+    local any_failed=false
+    for name in "${selected[@]}"; do
+        task_path="${task_path_by_process[$name]:-${exec_path_by_process[$name]:-}}"
+        port="$(_ds_process_port_from_meta "$project_path" "$name")"
+        http_mode="$(_ds_process_http_mode_from_meta "$project_path" "$name")"
+        if [[ -z "$port" ]]; then
+            port="$(_ds_detect_port_from_task_script "$task_path")"
+        fi
+
+        local is_running=false
+        local max_attempts=5
+        if [[ -n "$port" ]]; then
+            # First boot can take longer due dependency/bootstrap steps.
+            max_attempts=45
+        fi
+        for (( _attempt=1; _attempt<=max_attempts; _attempt++ )); do
+            if _ds_process_running "$task_path" "$port"; then
+                is_running=true
+                break
+            fi
+            sleep 1
+        done
+
+        if [[ "$is_running" == "false" ]]; then
+            # Fallback: some devenv versions return from --detach without
+            # leaving a persistent manager. Start this process via nohup.
+            (cd "$project_path" && nohup devenv up --no-tui "$name" >/dev/null 2>&1 &)
+            for (( _attempt=1; _attempt<=max_attempts; _attempt++ )); do
+                if _ds_process_running "$task_path" "$port"; then
+                    is_running=true
+                    break
+                fi
+                sleep 1
+            done
+        fi
+
+        local existing_entry existing_tsport
+        existing_entry="$(_ds_get_registry_entry "$project" "$name")"
+        existing_tsport=""
+        if [[ -n "$existing_entry" ]]; then
+            IFS='|' read -r _ _ _ existing_tsport _ <<<"$existing_entry"
+        fi
+
+        tsport=""
+        if [[ -n "$port" ]] && _ds_should_expose_http "$name" "$http_mode"; then
+            if [[ -n "$existing_tsport" ]]; then
+                tsport="$existing_tsport"
+            else
+                tsport="$(_ds_next_tsport)"
+            fi
+            if ! _ds_tailscale_on "$tsport" "$port"; then
+                echo -e "  ${YELLOW}Warning:${NC} failed tailscale serve for ${name} (${port})"
+                tsport=""
+            fi
+        fi
+
+        _ds_register_process_entry "$project" "$name" "$port" "$tsport" "$task_path"
+
+        if [[ "$is_running" == "true" ]]; then
+            ok "${name} running"
+        else
+            any_failed=true
+            echo -e "  ${YELLOW}Warning:${NC} ${name} is not running"
+            local log_path
+            log_path="${project_path}/.devenv/run/processes/logs/${name}.stderr.log"
+            if [[ -f "$log_path" ]]; then
+                echo -e "  ${DIM}log:${NC} ${log_path}"
+            fi
+        fi
+
+        if [[ -n "$port" ]]; then
+            ok "${name} local: http://127.0.0.1:${port}"
+        fi
+        if [[ -n "$tsport" ]]; then
+            ok "${name} tailscale: https://$(hostname).tail0b43a9.ts.net:${tsport}"
+        fi
+    done
+
+    if [[ "$any_failed" == "true" ]]; then
+        echo -e "${RED}Error:${NC} One or more processes failed to start for ${project}"
+        return 1
+    fi
 }
 
 dev_stop() {
-    local project="${1:-}"
+    local arg1="${1:-}" arg2="${2:-}"
+    local resolved project project_path process
 
     _ds_ensure_file
 
-    if [[ -z "$project" ]]; then
-        project=$(basename "$PWD")
-    fi
+    resolved="$(_ds_resolve_project_context "$arg1" "$arg2")"
+    IFS='|' read -r project project_path process <<<"$resolved"
 
-    if ! grep -q "^${project}|" "$DEVSERVERS_FILE" 2>/dev/null; then
-        echo -e "${RED}Error:${NC} No dev server registered for '${project}'"
+    if [[ -z "$project" ]]; then
+        echo -e "${RED}Error:${NC} Could not resolve project"
         return 1
     fi
 
-    local pid tsport project_path
-    pid=$(_ds_get "$project" "pid")
-    tsport=$(_ds_get "$project" "tsport")
-    project_path=$(get_project_path "$project")
+    step "Stopping devenv process(es) for ${project}${process:+ (${process})}"
 
-    step "Stopping dev server for ${project}"
+    if [[ -n "$process" ]]; then
+        local entry port tsport task_path
+        entry="$(_ds_get_registry_entry "$project" "$process")"
+        if [[ -z "$entry" ]]; then
+            echo -e "${RED}Error:${NC} No registered process '${process}' for ${project}"
+            return 1
+        fi
 
-    # Stop process-compose
-    if [[ -n "$project_path" ]] && [[ -f "$project_path/process-compose.yaml" ]]; then
-        (cd "$project_path" && process-compose down 2>/dev/null) || true
+        IFS='|' read -r _ _ port tsport task_path <<<"$entry"
+        _ds_stop_process_by_task_path "$task_path"
+        _ds_stop_devenv_up_launcher "$project_path" "$process"
+        _ds_stop_process_by_port "$port"
+
+        local still_running=false
+        for _attempt in 1 2 3; do
+            if _ds_process_running "$task_path" "$port"; then
+                still_running=true
+                sleep 1
+            else
+                still_running=false
+                break
+            fi
+        done
+
+        if [[ "$still_running" == "true" ]]; then
+            if [[ -n "$tsport" ]] && [[ -n "$port" ]]; then
+                _ds_tailscale_on "$tsport" "$port" >/dev/null 2>&1 || true
+            fi
+            echo -e "${RED}Error:${NC} Failed to stop ${process} for ${project}"
+            return 1
+        fi
+
+        _ds_tailscale_off "$tsport"
+        ok "Stopped ${process}"
+        return 0
     fi
 
-    # Kill process if still alive
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-        kill "$pid" 2>/dev/null || true
+    if [[ -d "$project_path" ]] && _ds_has_devenv "$project_path"; then
+        (cd "$project_path" && devenv processes down >/dev/null 2>&1) || true
     fi
 
-    # Remove tailscale serve
-    if [[ -n "$tsport" ]]; then
-        tailscale serve --https "$tsport" off 2>/dev/null || true
+    local entries
+    entries="$(grep "^${project}|" "$DEVSERVERS_FILE" 2>/dev/null || true)"
+    local had_failure=false
+    if [[ -n "$entries" ]]; then
+        while IFS='|' read -r _ process_name port tsport task_path; do
+            [[ -z "$process_name" ]] && continue
+            _ds_stop_process_by_task_path "$task_path"
+            _ds_stop_devenv_up_launcher "$project_path" "$process_name"
+            _ds_stop_process_by_port "$port"
+
+            if _ds_process_running "$task_path" "$port"; then
+                had_failure=true
+                echo -e "  ${YELLOW}Warning:${NC} ${process_name} still appears to be running"
+                if [[ -n "$tsport" ]] && [[ -n "$port" ]]; then
+                    _ds_tailscale_on "$tsport" "$port" >/dev/null 2>&1 || true
+                fi
+                continue
+            fi
+
+            _ds_tailscale_off "$tsport"
+        done <<<"$entries"
     fi
 
-    # Remove from registry
-    sed -i "/^${project}|/d" "$DEVSERVERS_FILE"
+    if [[ "$had_failure" == "true" ]]; then
+        echo -e "${RED}Error:${NC} One or more processes failed to stop for ${project}"
+        return 1
+    fi
 
-    ok "Stopped"
+    ok "Stopped all registered processes for ${project}"
 }
 
 dev_list() {
@@ -210,42 +580,48 @@ dev_list() {
     echo ""
 
     if [[ ! -s "$DEVSERVERS_FILE" ]]; then
-        echo -e "  ${DIM}No dev servers running. Use 'vaibhav dev start' in a project directory.${NC}"
+        echo -e "  ${DIM}No dev servers registered. Use 'vaibhav dev start'.${NC}"
         echo ""
         return
     fi
 
     local hostname
-    hostname=$(hostname)
+    hostname="$(hostname)"
 
-    while IFS='|' read -r project port tsport pid; do
+    local current_project=""
+    while IFS='|' read -r project process port tsport task_path; do
         [[ -z "$project" ]] && continue
 
+        if [[ "$project" != "$current_project" ]]; then
+            current_project="$project"
+            echo -e "${CYAN}${project}${NC}"
+        fi
+
         local status
-        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        if _ds_process_running "$task_path" "$port"; then
             status="${GREEN}running${NC}"
         else
             status="${RED}stopped${NC}"
         fi
 
-        echo -e "  ${CYAN}${project}${NC} ${status}"
-        echo -e "    ${DIM}Local:${NC}     http://127.0.0.1:${port}"
-        echo -e "    ${DIM}Tailscale:${NC} https://${hostname}.tail0b43a9.ts.net:${tsport}"
-    done < "$DEVSERVERS_FILE"
+        echo -e "  ${BOLD}${process}${NC} ${status}"
+        if [[ -n "$port" ]]; then
+            echo -e "    ${DIM}Local:${NC}     http://127.0.0.1:${port}"
+        fi
+        if [[ -n "$tsport" ]]; then
+            echo -e "    ${DIM}Tailscale:${NC} https://${hostname}.tail0b43a9.ts.net:${tsport}"
+        fi
+    done < <(sort "$DEVSERVERS_FILE")
 
     echo ""
 }
 
 dev_restart() {
-    local project="${1:-}"
-    if [[ -z "$project" ]]; then
-        project=$(basename "$PWD")
-    fi
-    dev_stop "$project"
-    dev_start "$project"
+    local arg1="${1:-}" arg2="${2:-}"
+    dev_stop "$arg1" "$arg2"
+    dev_start "$arg1" "$arg2"
 }
 
-# Main dispatch for dev subcommand
 dev_dispatch() {
     local action="${1:-list}"
     shift 2>/dev/null || true
@@ -264,19 +640,20 @@ dev_dispatch() {
             dev_list
             ;;
         *)
-            echo -e "${BOLD}Usage:${NC} vaibhav dev <command> [project]"
+            echo -e "${BOLD}Usage:${NC} vaibhav dev <command> [project] [process]"
             echo ""
             echo -e "${BOLD}Commands:${NC}"
-            echo "  start [project]    Start dev server (auto-detects from current dir)"
-            echo "  stop [project]     Stop dev server"
-            echo "  restart [project]  Restart dev server"
-            echo "  list               List all running dev servers"
+            echo "  start [project] [process]    Start devenv process(es)"
+            echo "  stop [project] [process]     Stop devenv process(es)"
+            echo "  restart [project] [process]  Restart devenv process(es)"
+            echo "  list                         List all registered dev processes"
             echo ""
             echo -e "${BOLD}Examples:${NC}"
             echo "  cd ~/projects/myapp && vaibhav dev start"
             echo "  vaibhav dev start kollywood"
+            echo "  vaibhav dev start kollywood server"
+            echo "  vaibhav dev stop kollywood temporal-server"
             echo "  vaibhav dev list"
-            echo "  vaibhav dev stop kollywood"
             ;;
     esac
 }
