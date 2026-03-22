@@ -30,6 +30,79 @@
 
     .loading { color: #555; font-size: 14px; text-align: center; margin-top: 40px; }
 
+    .activity-board {
+      display: none;
+      background: #141428;
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      gap: 8px;
+      flex-direction: column;
+    }
+    .activity-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12px;
+      color: #c9c9d9;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: #17172b;
+      border: 1px solid #2a2a46;
+    }
+    .activity-item.error {
+      border-color: #553333;
+      background: #2a171b;
+      color: #ffb5b5;
+    }
+    .activity-item.success {
+      border-color: #2c4a36;
+      background: #16261d;
+      color: #9af0b2;
+    }
+    .activity-main {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .activity-spinner {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      border: 2px solid #3a3a5a;
+      border-top-color: #00d9ff;
+      animation: spin 0.8s linear infinite;
+      flex: 0 0 auto;
+    }
+    .activity-done {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: currentColor;
+      flex: 0 0 auto;
+    }
+    .activity-title {
+      font-weight: 600;
+      color: #e7e7f7;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .activity-detail {
+      color: #8e8ea8;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .activity-age {
+      color: #787894;
+      flex: 0 0 auto;
+      font-variant-numeric: tabular-nums;
+    }
+
     .server-list { list-style: none; display: flex; flex-direction: column; gap: 14px; }
 
     .project-card {
@@ -87,6 +160,18 @@
     }
     .server-status.running { background: #1a3a2a; color: #50FA7B; }
     .server-status.stopped { background: #3a1a1a; color: #FF5555; }
+    .server-status.transitioning {
+      background: #3a321a;
+      color: #ffd56d;
+      animation: pulseStatus 1.2s ease-in-out infinite;
+    }
+
+    .server-note {
+      color: #8f8fa8;
+      font-size: 12px;
+      margin-top: -4px;
+      margin-bottom: 8px;
+    }
 
     .server-urls { margin-bottom: 12px; }
     .server-url {
@@ -148,6 +233,14 @@
     .toast.visible { opacity: 1; }
     .toast.error { border-color: #FF5555; color: #FF5555; }
     .toast.success { border-color: #50FA7B; color: #50FA7B; }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    @keyframes pulseStatus {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.65; }
+    }
   </style>
 </head>
 <body>
@@ -157,6 +250,7 @@
   </div>
 
   <div class="content">
+    <div class="activity-board" id="activity-board"></div>
     <div class="loading" id="loading">Loading...</div>
     <ul class="server-list" id="server-list" style="display:none"></ul>
       <div class="empty" id="empty" style="display:none">
@@ -172,7 +266,117 @@
     const $loading = document.getElementById('loading');
     const $empty = document.getElementById('empty');
     const $toast = document.getElementById('toast');
+    const $activityBoard = document.getElementById('activity-board');
     let toastTimer = null;
+    const activeOps = new Map();
+    let latestServers = [];
+    let latestProjects = [];
+
+    function targetKey(project, process) {
+      return `${project}::${process || 'all'}`;
+    }
+
+    function formatDuration(ms) {
+      const sec = Math.max(0, Math.floor(ms / 1000));
+      if (sec < 60) return `${sec}s`;
+      const min = Math.floor(sec / 60);
+      const rem = sec % 60;
+      return `${min}m ${rem}s`;
+    }
+
+    function processLabel(op) {
+      return op.process || 'all';
+    }
+
+    function hasConflictingOperation(project, process) {
+      const normalizedProcess = process || '';
+      for (const op of activeOps.values()) {
+        if (!op.active || op.project !== project) continue;
+        if (!op.process || !normalizedProcess || op.process === normalizedProcess) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function matchingOperation(project, process) {
+      const specific = activeOps.get(targetKey(project, process));
+      if (specific && specific.active) return specific;
+
+      const projectWide = activeOps.get(targetKey(project, ''));
+      if (projectWide && projectWide.active) return projectWide;
+
+      return null;
+    }
+
+    function projectIsBusy(project) {
+      for (const op of activeOps.values()) {
+        if (op.active && op.project === project) return true;
+      }
+      return false;
+    }
+
+    function opVerb(action) {
+      if (action === 'start') return 'Starting';
+      if (action === 'stop') return 'Stopping';
+      return 'Restarting';
+    }
+
+    function opSummary(op, data) {
+      const servers = (data.devServers || []).filter(
+        s => s.project === op.project && (!op.process || s.process === op.process),
+      );
+      if (servers.length === 0) {
+        return `${processLabel(op)} not registered yet`;
+      }
+
+      const readyCount = servers.filter(s => (op.expectedRunning ? s.running : !s.running)).length;
+      const pending = servers.filter(s => (op.expectedRunning ? !s.running : s.running));
+      const mode = op.expectedRunning ? 'ready' : 'stopped';
+      const base = `${readyCount}/${servers.length} ${mode}`;
+      if (pending.length === 0) {
+        return base;
+      }
+
+      const names = pending.map(s => s.process).slice(0, 3).join(', ');
+      const extra = pending.length > 3 ? ` +${pending.length - 3}` : '';
+      return `${base} · waiting on ${names}${extra}`;
+    }
+
+    function renderActivityBoard() {
+      const ops = Array.from(activeOps.values())
+        .sort((a, b) => b.startedAt - a.startedAt)
+        .slice(0, 4);
+
+      if (ops.length === 0) {
+        $activityBoard.style.display = 'none';
+        $activityBoard.innerHTML = '';
+        return;
+      }
+
+      $activityBoard.style.display = 'flex';
+      $activityBoard.innerHTML = ops.map(op => {
+        const age = formatDuration(Date.now() - op.startedAt);
+        const itemClass = op.active ? '' : (op.result === 'success' ? 'success' : 'error');
+        const indicatorClass = op.active ? 'activity-spinner' : 'activity-done';
+        const detail = op.detail || (op.active ? 'Waiting for status...' : 'Completed');
+        return `
+          <div class="activity-item ${itemClass}">
+            <div class="activity-main">
+              <span class="${indicatorClass}"></span>
+              <span class="activity-title">${opVerb(op.action)} ${op.project}/${processLabel(op)}</span>
+              <span class="activity-detail">${detail}</span>
+            </div>
+            <span class="activity-age">${age}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderWithLatest() {
+      renderServers(latestServers, latestProjects);
+      renderActivityBoard();
+    }
 
     function showToast(msg, type = '', sticky = false) {
       clearTimeout(toastTimer);
@@ -189,7 +393,10 @@
 
     async function fetchStatus() {
       const res = await fetch(`/api/status?_=${Date.now()}`, { cache: 'no-store' });
-      return res.json();
+      const data = await res.json();
+      latestServers = data.devServers || [];
+      latestProjects = data.projects || [];
+      return data;
     }
 
     function matchesExpectedState(data, project, process, expectedRunning) {
@@ -204,25 +411,60 @@
         : servers.every(s => !s.running);
     }
 
-    async function pollUntilState(project, process, expectedRunning) {
-      const timeoutMs = expectedRunning ? 120000 : 30000;
+    async function pollUntilState(op) {
+      const timeoutMs = op.expectedRunning ? 120000 : 30000;
       const intervalMs = 1000;
       const startedAt = Date.now();
 
       while ((Date.now() - startedAt) < timeoutMs) {
         try {
           const data = await fetchStatus();
-          renderServers(data.devServers || [], data.projects || []);
-          if (matchesExpectedState(data, project, process, expectedRunning)) {
-            return true;
+          op.detail = opSummary(op, data);
+          renderWithLatest();
+          if (matchesExpectedState(data, op.project, op.process, op.expectedRunning)) {
+            return { reached: true, data };
           }
         } catch {
-          // keep polling
+          op.detail = 'Waiting for status endpoint...';
+          renderActivityBoard();
         }
         await sleep(intervalMs);
       }
 
-      return false;
+      return { reached: false };
+    }
+
+    function rowState(ds, op) {
+      if (!op || !op.active) {
+        return {
+          cls: ds.running ? 'running' : 'stopped',
+          label: ds.running ? 'Running' : 'Stopped',
+          note: '',
+        };
+      }
+
+      const age = formatDuration(Date.now() - op.startedAt);
+      if (op.action === 'start') {
+        return {
+          cls: 'transitioning',
+          label: ds.running ? 'Starting...' : 'Starting...',
+          note: `Start requested ${age} ago`,
+        };
+      }
+
+      if (op.action === 'stop') {
+        return {
+          cls: 'transitioning',
+          label: 'Stopping...',
+          note: `Stop requested ${age} ago`,
+        };
+      }
+
+      return {
+        cls: 'transitioning',
+        label: 'Restarting...',
+        note: `Restart requested ${age} ago`,
+      };
     }
 
     function renderServers(servers, projects) {
@@ -256,6 +498,7 @@
             return (a.process || '').localeCompare(b.process || '');
           });
         const runningCount = projectServers.filter(s => s.running).length;
+        const busy = projectIsBusy(project);
 
         const li = document.createElement('li');
         li.innerHTML = `
@@ -263,20 +506,24 @@
             <div class="project-top">
               <div class="project-title">
                 <span class="project-name">${project}</span>
-                <span class="project-meta">${runningCount}/${projectServers.length} running</span>
+                <span class="project-meta">${runningCount}/${projectServers.length} running${busy ? ' · updating…' : ''}</span>
               </div>
               <div class="project-actions">
-                <button data-target="${project}::all" onclick="devAction('start', '${project}', '')">Start all</button>
-                <button data-target="${project}::all" onclick="devAction('restart', '${project}', '')">Restart all</button>
-                <button data-target="${project}::all" onclick="devAction('stop', '${project}', '')">Stop all</button>
+                <button data-target="${project}::all" onclick="devAction('start', '${project}', '')" ${busy ? 'disabled' : ''}>Start all</button>
+                <button data-target="${project}::all" onclick="devAction('restart', '${project}', '')" ${busy ? 'disabled' : ''}>Restart all</button>
+                <button data-target="${project}::all" onclick="devAction('stop', '${project}', '')" ${busy ? 'disabled' : ''}>Stop all</button>
               </div>
             </div>
 
-            ${projectServers.length > 0 ? projectServers.map(ds => `
+            ${projectServers.length > 0 ? projectServers.map(ds => {
+              const op = matchingOperation(project, ds.process);
+              const state = rowState(ds, op);
+              const rowBusy = Boolean(op && op.active);
+              return `
             <div class="server-card">
               <div class="server-top">
                 <span class="server-name">${ds.process}</span>
-                <span class="server-status ${ds.running ? 'running' : 'stopped'}">${ds.running ? 'Running' : 'Stopped'}</span>
+                <span class="server-status ${state.cls}">${state.label}</span>
               </div>
               <div class="server-urls">
               <div class="server-url">
@@ -288,16 +535,19 @@
                 ${ds.tailscaleUrl ? `<a href="${ds.tailscaleUrl}" target="_blank">${ds.tailscaleUrl}</a>` : '<span class="port">n/a</span>'}
               </div>
               </div>
+              ${state.note ? `<div class="server-note">${state.note}</div>` : ''}
               <div class="server-actions">
-                <button class="open" onclick="${ds.tailscaleUrl ? `window.open('${ds.tailscaleUrl}', '_blank')` : 'void(0)'}" ${!ds.running || !ds.tailscaleUrl ? 'disabled' : ''}>Open</button>
-                <button class="restart" data-target="${project}::${ds.process}" onclick="devAction('restart', '${project}', '${ds.process}')">Restart</button>
+                <button class="open" onclick="${ds.tailscaleUrl ? `window.open('${ds.tailscaleUrl}', '_blank')` : 'void(0)'}" ${rowBusy || !ds.running || !ds.tailscaleUrl ? 'disabled' : ''}>Open</button>
+                <button class="restart" data-target="${project}::${ds.process}" onclick="devAction('restart', '${project}', '${ds.process}')" ${rowBusy ? 'disabled' : ''}>Restart</button>
                 <button class="${ds.running ? 'stop' : 'start'}" data-target="${project}::${ds.process}"
+                  ${rowBusy ? 'disabled' : ''}
                   onclick="devAction('${ds.running ? 'stop' : 'start'}', '${project}', '${ds.process}')">
                   ${ds.running ? 'Stop' : 'Start'}
                 </button>
               </div>
             </div>
-            `).join('') : `
+            `;
+            }).join('') : `
             <div class="server-empty">
               No registered devenv processes yet. Start once with <code>vaibhav dev start ${project}</code>
             </div>
@@ -311,6 +561,7 @@
       try {
         const data = await fetchStatus();
         renderServers(data.devServers || [], data.projects || []);
+        renderActivityBoard();
       } catch (e) {
         $loading.style.display = 'none';
         $empty.style.display = 'block';
@@ -319,11 +570,29 @@
     }
 
     async function devAction(action, project, process) {
+      if (hasConflictingOperation(project, process)) {
+        showToast(`Another action is already running for ${project}`, 'error');
+        return;
+      }
+
       const target = `${project}::${process || 'all'}`;
       const btns = document.querySelectorAll(`button[data-target="${target}"]`);
       btns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
       const label = process ? `${project}/${process}` : `${project} (all)`;
       const verb = action === 'stop' ? 'Stopping' : action === 'start' ? 'Starting' : 'Restarting';
+      const op = {
+        key: target,
+        active: true,
+        result: null,
+        action,
+        project,
+        process: process || '',
+        expectedRunning: action !== 'stop',
+        startedAt: Date.now(),
+        detail: 'Sending request...',
+      };
+      activeOps.set(target, op);
+      renderWithLatest();
       showToast(`${verb} ${label}...`, '', true);
 
       try {
@@ -334,32 +603,53 @@
         });
         const data = await res.json();
         if (data.ok) {
-          const expectedRunning = action !== 'stop';
+          op.detail = `Request accepted, waiting for ${op.expectedRunning ? 'ready' : 'stop'} state...`;
+          renderWithLatest();
           showToast(
-            `Waiting for ${label} to ${expectedRunning ? 'be ready' : 'stop'}...`,
+            `Waiting for ${label} to ${op.expectedRunning ? 'be ready' : 'stop'}...`,
             '',
             true,
           );
 
-          const reached = await pollUntilState(project, process, expectedRunning);
-          if (reached) {
+          const result = await pollUntilState(op);
+          if (result.reached) {
+            op.result = 'success';
+            op.active = false;
+            op.detail = opSummary(op, result.data);
+            renderWithLatest();
             showToast(
-              `${label} ${expectedRunning ? 'running' : 'stopped'}`,
+              `${label} ${op.expectedRunning ? 'running' : 'stopped'}`,
               'success',
             );
           } else {
+            op.result = 'error';
+            op.active = false;
+            op.detail = 'Timed out while waiting for state change';
+            renderWithLatest();
             showToast(
-              `${label} is still ${expectedRunning ? 'starting' : 'stopping'} (timed out)` ,
+              `${label} is still ${op.expectedRunning ? 'starting' : 'stopping'} (timed out)` ,
               'error',
             );
           }
         } else {
+          op.result = 'error';
+          op.active = false;
+          op.detail = data.error || 'Action failed';
+          renderWithLatest();
           showToast(data.error || 'Action failed', 'error');
         }
       } catch (e) {
+        op.result = 'error';
+        op.active = false;
+        op.detail = 'Request failed';
+        renderWithLatest();
         showToast('Request failed', 'error');
       } finally {
         btns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
+        setTimeout(() => {
+          activeOps.delete(target);
+          renderWithLatest();
+        }, 3500);
       }
 
       setTimeout(loadServers, 300);
@@ -367,6 +657,11 @@
 
     loadServers();
     setInterval(loadServers, 10000);
+    setInterval(() => {
+      if (activeOps.size > 0) {
+        renderWithLatest();
+      }
+    }, 1000);
   </script>
 </body>
 </html>

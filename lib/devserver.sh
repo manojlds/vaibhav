@@ -442,12 +442,24 @@ dev_start() {
     step "Starting devenv process(es) for ${project}: ${selected[*]}"
 
     local name task_path port tsport http_mode candidate_ports detected_port ports_before expose_http
+    local existing_entry existing_port existing_tsport
     local any_failed=false
     for name in "${selected[@]}"; do
         task_path="${task_path_by_process[$name]:-${exec_path_by_process[$name]:-}}"
         port="$(_ds_process_port_from_meta "$project_path" "$name")"
         http_mode="$(_ds_process_http_mode_from_meta "$project_path" "$name")"
         candidate_ports="$(_ds_detect_ports_from_task_script "$task_path")"
+        existing_entry="$(_ds_get_registry_entry "$project" "$name")"
+        existing_port=""
+        existing_tsport=""
+        if [[ -n "$existing_entry" ]]; then
+            IFS='|' read -r _ _ existing_port existing_tsport _ <<<"$existing_entry"
+        fi
+
+        expose_http=false
+        if _ds_should_expose_http "$name" "$http_mode" "$task_path"; then
+            expose_http=true
+        fi
 
         if [[ -z "$port" ]]; then
             port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
@@ -455,18 +467,8 @@ dev_start() {
         if [[ -z "$port" && -n "$candidate_ports" ]]; then
             port="$(head -1 <<<"$candidate_ports")"
         fi
-
-        ports_before="$(_ds_list_listening_ports)"
-
-        if ! (cd "$project_path" && devenv processes up --detach --no-tui "$name"); then
-            any_failed=true
-            echo -e "  ${YELLOW}Warning:${NC} failed to start ${name} via devenv --detach"
-            continue
-        fi
-
-        expose_http=false
-        if _ds_should_expose_http "$name" "$http_mode" "$task_path"; then
-            expose_http=true
+        if [[ -z "$port" && -n "$existing_port" ]]; then
+            port="$existing_port"
         fi
 
         local is_running=false
@@ -475,34 +477,41 @@ dev_start() {
             max_attempts=20
         fi
 
-        for (( _attempt=1; _attempt<=max_attempts; _attempt++ )); do
-            if _ds_process_running "$task_path" "$port"; then
+        # Idempotent start: if already running, do not launch another supervisor.
+        if _ds_process_running "$task_path" "$port"; then
+            is_running=true
+        elif [[ -n "$candidate_ports" ]]; then
+            detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
+            if [[ -n "$detected_port" ]]; then
+                port="$detected_port"
                 is_running=true
-            elif [[ -n "$candidate_ports" ]]; then
-                detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
-                if [[ -n "$detected_port" ]]; then
-                    port="$detected_port"
-                    is_running=true
-                fi
-            else
-                detected_port="$(_ds_first_new_port_from_snapshot "$ports_before" || true)"
-                if [[ -n "$detected_port" ]]; then
-                    port="$detected_port"
-                    is_running=true
-                fi
             fi
-
-            if [[ "$is_running" == "true" ]]; then
-                break
-            fi
-
-            sleep 1
-        done
+        fi
 
         if [[ "$is_running" == "false" ]]; then
-            # Fallback: some devenv versions return from --detach without
-            # leaving a persistent manager. Start this process via nohup.
-            (cd "$project_path" && nohup devenv up --no-tui "$name" >/dev/null 2>&1 &)
+            ports_before="$(_ds_list_listening_ports)"
+
+            if ! (cd "$project_path" && devenv processes up --detach --no-tui "$name"); then
+                # A failed detach can still mean the process is already running.
+                if _ds_process_running "$task_path" "$port"; then
+                    is_running=true
+                elif [[ -n "$candidate_ports" ]]; then
+                    detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
+                    if [[ -n "$detected_port" ]]; then
+                        port="$detected_port"
+                        is_running=true
+                    fi
+                fi
+
+                if [[ "$is_running" == "false" ]]; then
+                    any_failed=true
+                    echo -e "  ${YELLOW}Warning:${NC} failed to start ${name} via devenv --detach"
+                    continue
+                fi
+            fi
+        fi
+
+        if [[ "$is_running" == "false" ]]; then
             for (( _attempt=1; _attempt<=max_attempts; _attempt++ )); do
                 if _ds_process_running "$task_path" "$port"; then
                     is_running=true
@@ -526,13 +535,35 @@ dev_start() {
 
                 sleep 1
             done
-        fi
 
-        local existing_entry existing_tsport
-        existing_entry="$(_ds_get_registry_entry "$project" "$name")"
-        existing_tsport=""
-        if [[ -n "$existing_entry" ]]; then
-            IFS='|' read -r _ _ _ existing_tsport _ <<<"$existing_entry"
+            if [[ "$is_running" == "false" ]]; then
+                # Fallback: some devenv versions return from --detach without
+                # leaving a persistent manager. Start this process via nohup.
+                (cd "$project_path" && nohup devenv up --no-tui "$name" >/dev/null 2>&1 &)
+                for (( _attempt=1; _attempt<=max_attempts; _attempt++ )); do
+                    if _ds_process_running "$task_path" "$port"; then
+                        is_running=true
+                    elif [[ -n "$candidate_ports" ]]; then
+                        detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
+                        if [[ -n "$detected_port" ]]; then
+                            port="$detected_port"
+                            is_running=true
+                        fi
+                    else
+                        detected_port="$(_ds_first_new_port_from_snapshot "$ports_before" || true)"
+                        if [[ -n "$detected_port" ]]; then
+                            port="$detected_port"
+                            is_running=true
+                        fi
+                    fi
+
+                    if [[ "$is_running" == "true" ]]; then
+                        break
+                    fi
+
+                    sleep 1
+                done
+            fi
         fi
 
         tsport=""
