@@ -156,6 +156,12 @@ function extractPortsFromText(text) {
   return uniquePorts(rawPorts).sort((a, b) => a - b);
 }
 
+function extractUiPortFromText(text) {
+  const match = text.match(/--ui-port\s*[:= ]\s*(\d{2,5})/i);
+  if (!match?.[1]) return null;
+  return normalizePort(match[1]);
+}
+
 async function extractPortsFromTaskScript(taskPath) {
   if (!taskPath) return [];
 
@@ -164,6 +170,17 @@ async function extractPortsFromTaskScript(taskPath) {
     return extractPortsFromText(script);
   } catch {
     return [];
+  }
+}
+
+async function extractUiPortFromTaskScript(taskPath) {
+  if (!taskPath) return null;
+
+  try {
+    const script = await fs.readFile(taskPath, "utf8");
+    return extractUiPortFromText(script);
+  } catch {
+    return null;
   }
 }
 
@@ -290,12 +307,19 @@ async function loadDevServers() {
       const tsport = normalizePort(tsportRaw);
       const tailscaleActive = tsport ? activeTailscalePorts.has(tsport) : false;
       const candidatePorts = await extractPortsFromTaskScript(taskPath);
-      const httpExposed = shouldExposeHttp(processName, taskPath);
+      const uiPort = await extractUiPortFromTaskScript(taskPath);
+      const preferredPort = uiPort || port;
+      const inferredHttpExposed = shouldExposeHttp(processName, taskPath);
+      const httpExposed = Boolean(tsport) || inferredHttpExposed || uiPort !== null;
 
       let running = false;
-      let effectivePort = port;
+      let effectivePort = preferredPort;
       if (taskPath) {
-        const state = await checkDevProcessRunning({ taskPath, port, candidatePorts });
+        const state = await checkDevProcessRunning({
+          taskPath,
+          port: preferredPort,
+          candidatePorts,
+        });
         running = state.running;
         effectivePort = state.port || effectivePort;
       } else if (legacyPid) {

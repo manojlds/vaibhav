@@ -233,6 +233,15 @@ _ds_detect_ports_from_task_script() {
     } | awk '$1 >= 1 && $1 <= 65535 { print $1 }' | sort -n | uniq
 }
 
+_ds_detect_ui_port_from_task_script() {
+    local task_path="$1"
+    [[ -f "$task_path" ]] || return 0
+
+    grep -Eo -- '--ui-port[[:space:]=]+[0-9]{2,5}' "$task_path" 2>/dev/null \
+        | grep -Eo '[0-9]{2,5}' \
+        | head -1 || true
+}
+
 _ds_first_open_port_from_list() {
     local ports="$1"
     local port
@@ -441,14 +450,17 @@ dev_start() {
 
     step "Starting devenv process(es) for ${project}: ${selected[*]}"
 
-    local name task_path port tsport http_mode candidate_ports detected_port ports_before expose_http
+    local name task_path meta_port port tsport http_mode candidate_ports ui_port
+    local detected_port ports_before expose_http
     local existing_entry existing_port existing_tsport
     local any_failed=false
     for name in "${selected[@]}"; do
         task_path="${task_path_by_process[$name]:-${exec_path_by_process[$name]:-}}"
-        port="$(_ds_process_port_from_meta "$project_path" "$name")"
+        meta_port="$(_ds_process_port_from_meta "$project_path" "$name")"
+        port="$meta_port"
         http_mode="$(_ds_process_http_mode_from_meta "$project_path" "$name")"
         candidate_ports="$(_ds_detect_ports_from_task_script "$task_path")"
+        ui_port="$(_ds_detect_ui_port_from_task_script "$task_path")"
         existing_entry="$(_ds_get_registry_entry "$project" "$name")"
         existing_port=""
         existing_tsport=""
@@ -459,6 +471,13 @@ dev_start() {
         expose_http=false
         if _ds_should_expose_http "$name" "$http_mode" "$task_path"; then
             expose_http=true
+        elif [[ -z "$http_mode" && -n "$ui_port" ]]; then
+            # Explicit UI port in process script means this process is browser-facing.
+            expose_http=true
+        fi
+
+        if [[ -z "$meta_port" && "$expose_http" == "true" && -n "$ui_port" ]]; then
+            port="$ui_port"
         fi
 
         if [[ -z "$port" ]]; then
