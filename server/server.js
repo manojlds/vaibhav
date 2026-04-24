@@ -699,16 +699,14 @@ app.get("/api/env", async (req) => {
   const file = req.query.file || "";
 
   if (!project) {
-    // List all projects and their env files
+    // List all projects and their env files (show all, even those without)
     const projects = await loadProjects();
     const result = [];
     for (const proj of projects) {
       try {
         const files = await fs.readdir(proj.path);
         const envFiles = files.filter((f) => f.startsWith(".env") || f.endsWith(".env"));
-        if (envFiles.length > 0) {
-          result.push({ name: proj.name, path: proj.path, envFiles });
-        }
+        result.push({ name: proj.name, path: proj.path, envFiles });
       } catch {
         // ignore unreadable dirs
       }
@@ -736,6 +734,10 @@ app.get("/api/env", async (req) => {
     const content = await fs.readFile(envPath, "utf8");
     return { project, file, entries: parseEnv(content), raw: content };
   } catch (e) {
+    // File doesn't exist yet — return empty entries so UI can create it
+    if (e.code === "ENOENT") {
+      return { project, file, entries: [], raw: "" };
+    }
     return { ok: false, error: e.message };
   }
 });
