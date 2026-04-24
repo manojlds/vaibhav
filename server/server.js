@@ -162,30 +162,34 @@ function extractUiPortFromText(text) {
   return normalizePort(match[1]);
 }
 
-async function extractPortsFromTaskScript(taskPath) {
-  if (!taskPath) return [];
+async function extractPortsFromTaskScript(taskPathOrMeta) {
+  if (!taskPathOrMeta) return [];
+
+  const raw = String(taskPathOrMeta);
 
   try {
-    const script = await fs.readFile(taskPath, "utf8");
+    const script = await fs.readFile(raw, "utf8");
     return extractPortsFromText(script);
   } catch {
-    return [];
+    return extractPortsFromText(raw);
   }
 }
 
-async function extractUiPortFromTaskScript(taskPath) {
-  if (!taskPath) return null;
+async function extractUiPortFromTaskScript(taskPathOrMeta) {
+  if (!taskPathOrMeta) return null;
+
+  const raw = String(taskPathOrMeta);
 
   try {
-    const script = await fs.readFile(taskPath, "utf8");
+    const script = await fs.readFile(raw, "utf8");
     return extractUiPortFromText(script);
   } catch {
-    return null;
+    return extractUiPortFromText(raw);
   }
 }
 
-function shouldExposeHttp(processName, taskPath = "") {
-  const hints = `${processName || ""} ${taskPath || ""}`.toLowerCase();
+function shouldExposeHttp(processName, taskPathOrMeta = "") {
+  const hints = `${processName || ""} ${taskPathOrMeta || ""}`.toLowerCase();
   const infraIndicators = [
     "temporal",
     "otel",
@@ -210,7 +214,7 @@ function shouldExposeHttp(processName, taskPath = "") {
   return true;
 }
 
-async function checkDevProcessRunning({ taskPath, port, candidatePorts = [] }) {
+async function checkDevProcessRunning({ projectPath, processName, taskPath, port, candidatePorts = [] }) {
   const portsToCheck = uniquePorts([port, ...candidatePorts]);
 
   for (const candidate of portsToCheck) {
@@ -219,12 +223,31 @@ async function checkDevProcessRunning({ taskPath, port, candidatePorts = [] }) {
     }
   }
 
+  if (projectPath && processName) {
+    try {
+      const { stdout } = await execFileAsync("pitchfork", ["status", processName], {
+        timeout: 2500,
+        cwd: projectPath,
+        env: tmuxEnv(),
+      });
+
+      if (/^Status:\s*running/im.test(stdout)) {
+        return { running: true, port: portsToCheck[0] || null };
+      }
+    } catch {
+      // fall through to process/port heuristics
+    }
+  }
+
   if (taskPath) {
     try {
-      await execFileAsync("pgrep", ["-f", taskPath], { timeout: 2000, env: tmuxEnv() });
-      return { running: true, port: portsToCheck[0] || null };
+      const stat = await fs.stat(taskPath);
+      if (stat.isFile()) {
+        await execFileAsync("pgrep", ["-f", taskPath], { timeout: 2000, env: tmuxEnv() });
+        return { running: true, port: portsToCheck[0] || null };
+      }
     } catch {
-      return { running: false, port: portsToCheck[0] || null };
+      // ignore and fall through
     }
   }
 
@@ -277,6 +300,8 @@ async function getTailscaleServeState() {
 async function loadDevServers() {
   try {
     const content = await fs.readFile(DEVSERVERS_FILE, "utf8");
+    const projects = await loadProjects();
+    const projectPathByName = new Map(projects.map((p) => [p.name, p.path]));
     const hostname = (await execFileAsync("hostname")).stdout.trim();
     const { ports: activeTailscalePorts, dnsName: tailscaleDnsName } =
       await getTailscaleServeState();
@@ -314,8 +339,11 @@ async function loadDevServers() {
 
       let running = false;
       let effectivePort = preferredPort;
-      if (taskPath) {
+      const projectPath = projectPathByName.get(project) || null;
+      if (taskPath || projectPath) {
         const state = await checkDevProcessRunning({
+          projectPath,
+          processName,
           taskPath,
           port: preferredPort,
           candidatePorts,
@@ -585,6 +613,10 @@ app.get("/dev", async (req, reply) => {
   return reply.sendFile("dev.html");
 });
 
+app.get("/env", async (req, reply) => {
+  return reply.sendFile("env.html");
+});
+
 // --- Dev server management API ---
 app.post("/api/dev", async (req) => {
   const { action = "", project = "", process = "" } = req.body || {};
@@ -618,6 +650,135 @@ app.post("/api/dev", async (req) => {
     const stdout = typeof e?.stdout === "string" ? e.stdout.trim() : "";
     const details = stderr || stdout;
     return { ok: false, error: details || e.message };
+  }
+});
+
+// --- Env file management ---
+function parseEnv(content) {
+  const lines = content.split("\n");
+  const entries = [];
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const trimmed = raw.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      entries.push({ type: "comment", value: raw, line: i });
+      continue;
+    }
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) {
+      entries.push({ type: "comment", value: raw, line: i });
+      continue;
+    }
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1);
+    // Handle quoted values
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    entries.push({ type: "var", key, value, line: i });
+  }
+  return entries;
+}
+
+function serializeEnv(entries) {
+  const lines = [];
+  for (const entry of entries) {
+    if (entry.type === "comment" || entry.type === "blank") {
+      lines.push(entry.value);
+    } else if (entry.type === "var") {
+      const needsQuotes = entry.value.includes(" ") || entry.value.includes("#");
+      const val = needsQuotes ? `"${entry.value.replace(/"/g, '\\"')}"` : entry.value;
+      lines.push(`${entry.key}=${val}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+app.get("/api/env", async (req) => {
+  const project = req.query.project || "";
+  const file = req.query.file || "";
+
+  if (!project) {
+    // List all projects and their env files
+    const projects = await loadProjects();
+    const result = [];
+    for (const proj of projects) {
+      try {
+        const files = await fs.readdir(proj.path);
+        const envFiles = files.filter((f) => f.startsWith(".env") || f.endsWith(".env"));
+        if (envFiles.length > 0) {
+          result.push({ name: proj.name, path: proj.path, envFiles });
+        }
+      } catch {
+        // ignore unreadable dirs
+      }
+    }
+    return { projects: result };
+  }
+
+  // Specific project + file
+  const projects = await loadProjects();
+  const proj = projects.find((p) => p.name === project);
+  if (!proj) return { ok: false, error: `project not found: ${project}` };
+
+  if (!file) {
+    try {
+      const files = await fs.readdir(proj.path);
+      const envFiles = files.filter((f) => f.startsWith(".env") || f.endsWith(".env"));
+      return { project, envFiles };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
+  const envPath = path.join(proj.path, file);
+  try {
+    const content = await fs.readFile(envPath, "utf8");
+    return { project, file, entries: parseEnv(content), raw: content };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+app.post("/api/env", async (req) => {
+  const { project = "", file = ".env", entries = [] } = req.body || {};
+  if (!project) return { ok: false, error: "project required" };
+
+  const projects = await loadProjects();
+  const proj = projects.find((p) => p.name === project);
+  if (!proj) return { ok: false, error: `project not found: ${project}` };
+
+  const envPath = path.join(proj.path, file);
+  try {
+    const data = serializeEnv(entries);
+    await fs.writeFile(envPath, data, "utf8");
+    return { ok: true, project, file };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+app.delete("/api/env", async (req) => {
+  const { project = "", file = ".env", key = "" } = req.body || {};
+  if (!project || !key) return { ok: false, error: "project and key required" };
+
+  const projects = await loadProjects();
+  const proj = projects.find((p) => p.name === project);
+  if (!proj) return { ok: false, error: `project not found: ${project}` };
+
+  const envPath = path.join(proj.path, file);
+  try {
+    let content = "";
+    try {
+      content = await fs.readFile(envPath, "utf8");
+    } catch {
+      return { ok: false, error: "env file not found" };
+    }
+    const entries = parseEnv(content).filter((e) => e.type !== "var" || e.key !== key);
+    await fs.writeFile(envPath, serializeEnv(entries), "utf8");
+    return { ok: true, project, file, deleted: key };
+  } catch (e) {
+    return { ok: false, error: e.message };
   }
 });
 
