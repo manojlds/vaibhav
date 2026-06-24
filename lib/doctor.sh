@@ -518,10 +518,11 @@ show_doctor() {
     local lan_reachable="unknown"
     if [[ -n "$lan_host" ]]; then
         if command -v ping &>/dev/null; then
-            if ping -c 1 -W 2 "$lan_host" >/dev/null 2>&1; then
+            lan_reachable="no"
+            if ping -c 3 -W 2 "$lan_host" >/dev/null 2>&1; then
                 lan_reachable="yes"
-            else
-                lan_reachable="no"
+            elif command -v nc &>/dev/null && nc -z -w 3 "$lan_host" 22 >/dev/null 2>&1; then
+                lan_reachable="yes"
             fi
             if [[ "$lan_reachable" == "yes" ]]; then
                 echo -e "  LAN host:        ${CYAN}${lan_host}${NC} ${GREEN}(reachable)${NC}"
