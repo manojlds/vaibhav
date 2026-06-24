@@ -8,9 +8,21 @@ VAIBHAV_MOSH_NO_INIT="${VAIBHAV_MOSH_NO_INIT:-true}"
 VAIBHAV_LAN_HOST="${VAIBHAV_LAN_HOST:-}"
 
 # Resolve LAN host once — builds a global opts array used by all SSH calls
+# Probe robustly: a single ICMP packet often drops on the first attempt while
+# ARP/wifi resolves, causing a silent fallback to the Tailscale host. Send a
+# few probes over a short window, and as a tie-breaker try a TCP connect to
+# the SSH port (LAN firewalls sometimes drop ICMP but allow SSH).
 _VSSH_OPTS=()
-if [[ -n "${VAIBHAV_LAN_HOST:-}" ]] && ping -c 1 -W 2 "$VAIBHAV_LAN_HOST" >/dev/null 2>&1; then
-    _VSSH_OPTS=(-o "HostName=$VAIBHAV_LAN_HOST")
+if [[ -n "${VAIBHAV_LAN_HOST:-}" ]]; then
+    lan_reachable=false
+    if ping -c 3 -W 2 "$VAIBHAV_LAN_HOST" >/dev/null 2>&1; then
+        lan_reachable=true
+    elif command -v nc &>/dev/null && nc -z -w 3 "$VAIBHAV_LAN_HOST" 22 >/dev/null 2>&1; then
+        lan_reachable=true
+    fi
+    if [[ "$lan_reachable" == "true" ]]; then
+        _VSSH_OPTS=(-o "HostName=$VAIBHAV_LAN_HOST")
+    fi
 fi
 
 vaibhav_is_current_host_desktop() {

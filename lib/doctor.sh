@@ -418,7 +418,13 @@ EOF
     VAIBHAV_LAN_HOST="$detected_ip"
 
     _VSSH_OPTS=()
-    if ping -c 1 -W 2 "$VAIBHAV_LAN_HOST" >/dev/null 2>&1; then
+    lan_reachable=false
+    if ping -c 3 -W 2 "$VAIBHAV_LAN_HOST" >/dev/null 2>&1; then
+        lan_reachable=true
+    elif command -v nc &>/dev/null && nc -z -w 3 "$VAIBHAV_LAN_HOST" 22 >/dev/null 2>&1; then
+        lan_reachable=true
+    fi
+    if [[ "$lan_reachable" == "true" ]]; then
         _VSSH_OPTS=(-o "HostName=$VAIBHAV_LAN_HOST")
     fi
 
