@@ -236,7 +236,7 @@ if systemctl --user is-active --quiet vaibhav-files 2>/dev/null; then
     ok "vaibhav-files service already running"
     echo -e "  ${DIM}Sharing: ${SHARE_DIR}${NC}"
 else
-    read -rp "  Set up a file sharing server (APKs, HTML, etc.)? [y/N] " yn </dev/tty
+    read -rp "  Set up a file sharing server (HTML, output, etc.)? [y/N] " yn </dev/tty
     if [[ "$yn" =~ ^[Yy]$ ]]; then
         FILES_PORT=9090
         FILES_HTTPS_PORT=9443
@@ -246,8 +246,8 @@ else
         FILES_HTTPS_PORT="${input_files_https_port:-$FILES_HTTPS_PORT}"
 
         # Create share directory with common subdirs
-        mkdir -p "$SHARE_DIR"/{apk,html,output}
-        ok "Created ${SHARE_DIR}/ (apk/ html/ output/)"
+        mkdir -p "$SHARE_DIR"/{html,output}
+        ok "Created ${SHARE_DIR}/ (html/ output/)"
 
         # Create systemd unit — Python http.server on localhost
         mkdir -p ~/.config/systemd/user
