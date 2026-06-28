@@ -129,6 +129,24 @@ run_after_herdr_switcher_exits() {
     nohup sh -c 'sleep 1; "$@"' sh "$@" >/dev/null 2>&1 &
 }
 
+latest_live_herdr_client_pid() {
+    local log_path="${XDG_CONFIG_HOME:-$HOME/.config}/herdr/herdr-client.log"
+    [[ -f "$log_path" ]] || return 1
+
+    local pid
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] || continue
+        if kill -0 "$pid" 2>/dev/null; then
+            printf '%s\n' "$pid"
+            return 0
+        fi
+    done < <(grep -Eo 'subsystem="client" outcome="started" pid=[0-9]+' "$log_path" 2>/dev/null \
+        | sed 's/.*pid=//' \
+        | tac)
+
+    return 1
+}
+
 is_active_session() {
     local session="$1"
     list_sessions | grep -qx "$session" 2>/dev/null
@@ -155,7 +173,14 @@ detach_current() {
             tmux detach-client
             ;;
         herdr)
-            notify "Use Herdr detach binding: prefix+q"
+            local client_pid
+            client_pid="$(latest_live_herdr_client_pid || true)"
+            if [[ -n "$client_pid" ]]; then
+                # shellcheck disable=SC2016 # $1 is evaluated by the delayed shell
+                nohup sh -c 'sleep 0.2; kill -TERM "$1"' sh "$client_pid" >/dev/null 2>&1 &
+            else
+                notify "Use Herdr detach binding: prefix+q"
+            fi
             ;;
     esac
 }
