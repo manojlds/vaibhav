@@ -64,12 +64,16 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && ! vaibhav_is_current_host_desktop; then
     set -- "${args[@]+"${args[@]}"}"
 
     forwarded_args="$*"
+    remote_env=""
+    if [[ "${VAIBHAV_MUX_OVERRIDE:-false}" == "true" ]]; then
+        remote_env="VAIBHAV_MULTIPLEXER=${VAIBHAV_MULTIPLEXER} "
+    fi
 
     case "${1:-}" in
         init|update|setup|doctor|refresh)
             ;; # init, update, setup, doctor, and refresh always run locally
         list|ls|help|-h|--help|web)
-            exec ssh "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav ${forwarded_args}'"
+            exec ssh "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '${remote_env}\$HOME/bin/vaibhav ${forwarded_args}'"
             ;;
         *)
             if [[ "$use_mosh" == "true" ]] && command -v mosh &>/dev/null; then
@@ -78,12 +82,12 @@ if [[ -n "$VAIBHAV_DESKTOP_HOST" ]] && ! vaibhav_is_current_host_desktop; then
                     mosh_args+=(--no-init)
                 fi
                 echo -e "  ${DIM}connecting via mosh...${NC}"
-                exec mosh --ssh="ssh ${_VSSH_OPTS[*]}" "${mosh_args[@]}" "$VAIBHAV_SSH_HOST" -- sh -c "\$SHELL -lic \"\\\$HOME/bin/vaibhav ${forwarded_args}\""
+                exec mosh --ssh="ssh ${_VSSH_OPTS[*]}" "${mosh_args[@]}" "$VAIBHAV_SSH_HOST" -- sh -c "\$SHELL -lic \"${remote_env}\\\$HOME/bin/vaibhav ${forwarded_args}\""
             else
                 if [[ "$use_mosh" == "true" ]]; then
                     echo -e "  ${YELLOW}!${NC} ${DIM}mosh not found, falling back to ssh${NC}"
                 fi
-                exec ssh -t "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '\$HOME/bin/vaibhav ${forwarded_args}'"
+                exec ssh -t "${_VSSH_OPTS[@]}" "$VAIBHAV_SSH_HOST" "\$SHELL -lic '${remote_env}\$HOME/bin/vaibhav ${forwarded_args}'"
             fi
             ;;
     esac

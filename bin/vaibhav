@@ -34,6 +34,43 @@ source "$VAIBHAV_LIB/ui.sh"
 # shellcheck source=../lib/mux.sh
 source "$VAIBHAV_LIB/mux.sh"
 
+# --- Global flags ---
+export VAIBHAV_MUX_OVERRIDE="false"
+args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --mux|--multiplexer)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Error:${NC} --mux requires tmux, herdr, or auto"
+                exit 1
+            fi
+            VAIBHAV_MULTIPLEXER="$(normalize_multiplexer_preference "$2")"
+            export VAIBHAV_MUX_OVERRIDE="true"
+            shift 2
+            ;;
+        --mux=*|--multiplexer=*)
+            VAIBHAV_MULTIPLEXER="$(normalize_multiplexer_preference "${1#*=}")"
+            export VAIBHAV_MUX_OVERRIDE="true"
+            shift
+            ;;
+        --tmux)
+            VAIBHAV_MULTIPLEXER="tmux"
+            export VAIBHAV_MUX_OVERRIDE="true"
+            shift
+            ;;
+        --herdr)
+            VAIBHAV_MULTIPLEXER="herdr"
+            export VAIBHAV_MUX_OVERRIDE="true"
+            shift
+            ;;
+        *)
+            args+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "${args[@]+"${args[@]}"}"
+
 # --- Resolve multiplexer backend ---
 # shellcheck disable=SC2034 # used by sourced lib modules
 VAIBHAV_MULTIPLEXER="$(normalize_multiplexer_preference "${VAIBHAV_MULTIPLEXER:-tmux}")"
