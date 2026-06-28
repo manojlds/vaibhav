@@ -126,25 +126,25 @@ _herdr_workspace_id_by_label() {
 run_after_herdr_switcher_exits() {
     # Herdr closes the temporary command pane after this script exits. Delay
     # focus/open actions so that close does not restore the old workspace.
-    nohup sh -c 'sleep 1; "$@"' sh "$@" >/dev/null 2>&1 &
+    if command -v setsid >/dev/null 2>&1; then
+        setsid -f sh -c 'sleep 1; "$@"' sh "$@" >/dev/null 2>&1
+    else
+        nohup sh -c 'sleep 1; "$@"' sh "$@" >/dev/null 2>&1 &
+    fi
 }
 
-latest_live_herdr_client_pid() {
-    local log_path="${XDG_CONFIG_HOME:-$HOME/.config}/herdr/herdr-client.log"
-    [[ -f "$log_path" ]] || return 1
-
-    local pid
-    while IFS= read -r pid; do
-        [[ -n "$pid" ]] || continue
-        if kill -0 "$pid" 2>/dev/null; then
-            printf '%s\n' "$pid"
-            return 0
-        fi
-    done < <(grep -Eo 'subsystem="client" outcome="started" pid=[0-9]+' "$log_path" 2>/dev/null \
-        | sed 's/.*pid=//' \
-        | tac)
-
-    return 1
+live_herdr_client_pids() {
+    ps -eo pid=,args= \
+        | while read -r pid args; do
+            [[ -n "$pid" && -n "$args" ]] || continue
+            case "$args" in
+                herdr|*/herdr)
+                    if kill -0 "$pid" 2>/dev/null; then
+                        printf '%s\n' "$pid"
+                    fi
+                    ;;
+            esac
+        done
 }
 
 is_active_session() {
@@ -173,11 +173,11 @@ detach_current() {
             tmux detach-client
             ;;
         herdr)
-            local client_pid
-            client_pid="$(latest_live_herdr_client_pid || true)"
-            if [[ -n "$client_pid" ]]; then
-                # shellcheck disable=SC2016 # $1 is evaluated by the delayed shell
-                nohup sh -c 'sleep 0.2; kill -TERM "$1"' sh "$client_pid" >/dev/null 2>&1 &
+            local client_pids
+            client_pids="$(live_herdr_client_pids || true)"
+            if [[ -n "$client_pids" ]]; then
+                # shellcheck disable=SC2086 # intentional split: kill accepts multiple pids
+                nohup sh -c 'sleep 0.2; kill -TERM "$@"' sh $client_pids >/dev/null 2>&1 &
             else
                 notify "Use Herdr detach binding: prefix+q"
             fi

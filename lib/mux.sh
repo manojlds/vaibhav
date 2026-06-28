@@ -120,6 +120,24 @@ _mux_herdr_agent_pane_id_by_tab() {
         | head -1 || true
 }
 
+_mux_herdr_pane_ids_by_tab() {
+    local workspace_id="$1" tab_id="$2"
+    herdr pane list --workspace "$workspace_id" 2>/dev/null \
+        | _mux_herdr_json_objects \
+        | grep -F "\"tab_id\":\"${tab_id}\"" \
+        | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' || true
+}
+
+_mux_herdr_close_other_panes_in_tab() {
+    local workspace_id="$1" tab_id="$2" keep_pane_id="$3"
+    local pane_id
+
+    while IFS= read -r pane_id; do
+        [[ -z "$pane_id" || "$pane_id" == "$keep_pane_id" ]] && continue
+        herdr pane close "$pane_id" >/dev/null 2>&1 || true
+    done < <(_mux_herdr_pane_ids_by_tab "$workspace_id" "$tab_id")
+}
+
 _mux_herdr_labels_from_json() {
     grep -Eo '"label":"[^"]+"' \
         | sed 's/^"label":"//; s/"$//'
@@ -270,7 +288,13 @@ mux_create_target() {
             fi
             [[ -n "$tab_id" ]] || return 1
             if [[ -n "$command" ]]; then
-                herdr agent start "$target" --cwd "$path" --workspace "$workspace_id" --tab "$tab_id" --focus -- "$command" >/dev/null
+                local start_output
+                start_output="$(herdr agent start "$target" --cwd "$path" --workspace "$workspace_id" --tab "$tab_id" --focus -- "$command")"
+                pane_id="$(sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' <<<"$start_output" | tail -1)"
+                if [[ -n "$pane_id" ]]; then
+                    _mux_herdr_close_other_panes_in_tab "$workspace_id" "$tab_id" "$pane_id"
+                    herdr pane focus --pane "$pane_id" >/dev/null 2>&1 || true
+                fi
             else
                 pane_id="$(herdr pane list --workspace "$workspace_id" \
                     | _mux_herdr_json_objects \
