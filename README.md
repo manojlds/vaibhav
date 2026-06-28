@@ -121,23 +121,23 @@ vaibhav web opencode stop   # Stop OpenCode Web service
 
 `vaibhav web --url-only` prints the OpenCode URL only (used by setup scripts).
 
-## Dev servers (devenv)
+## Dev servers (pitchfork)
 
-`vaibhav dev` manages per-project dev services using `devenv` processes.
+`vaibhav dev` manages per-project dev services using `pitchfork` daemons.
 
 ```bash
 vaibhav dev list
-vaibhav dev start kollywood          # start all devenv processes for project
+vaibhav dev start kollywood          # start all pitchfork processes for project
 vaibhav dev start kollywood server   # start one process
 vaibhav dev stop kollywood server    # stop one process
 vaibhav dev stop kollywood           # stop all project processes
 ```
 
-Each project should define `processes.<name>.exec` in `devenv.nix` (or
-`devenv.yaml`).
+Each project should define `[daemons.<name>]` in `pitchfork.toml`.
 
-By default, `vaibhav` discovers ports from generated devenv process scripts
-and live socket probes, so a separate metadata file is usually not needed.
+By default, `vaibhav` discovers ports from daemon commands and readiness
+settings in `pitchfork.toml` plus live socket probes, so a separate metadata
+file is usually not needed.
 
 Optional per-process overrides can be added in `.vaibhav-devservers` at the
 project root:
@@ -149,6 +149,9 @@ temporal-server||nohttp
 ```
 
 Fields are `process|port|http_mode` where `http_mode` is `http` or `nohttp`.
+
+Each project should also define tool/runtime versions in `mise.toml` so
+pitchfork starts are consistent on local and remote environments.
 
 ## Ralph loop
 
