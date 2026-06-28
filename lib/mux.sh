@@ -276,7 +276,7 @@ mux_create_target() {
             if [[ -n "$tab_id" && -n "$command" ]]; then
                 pane_id="$(_mux_herdr_agent_pane_id_by_tab "$workspace_id" "$tab_id" "$target")"
                 if [[ -n "$pane_id" ]]; then
-                    herdr pane focus --pane "$pane_id" >/dev/null
+                    herdr tab focus "$tab_id" >/dev/null
                     return 0
                 fi
             fi
@@ -293,17 +293,9 @@ mux_create_target() {
                 pane_id="$(sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' <<<"$start_output" | tail -1)"
                 if [[ -n "$pane_id" ]]; then
                     _mux_herdr_close_other_panes_in_tab "$workspace_id" "$tab_id" "$pane_id"
-                    herdr pane focus --pane "$pane_id" >/dev/null 2>&1 || true
                 fi
             else
-                pane_id="$(herdr pane list --workspace "$workspace_id" \
-                    | _mux_herdr_json_objects \
-                    | grep -F "\"tab_id\":\"${tab_id}\"" \
-                    | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' \
-                    | head -1 || true)"
-                if [[ -n "$pane_id" ]]; then
-                    herdr pane focus --pane "$pane_id" >/dev/null 2>&1 || true
-                fi
+                herdr tab focus "$tab_id" >/dev/null 2>&1 || true
             fi
             ;;
     esac
@@ -324,7 +316,7 @@ mux_select_target() {
             [[ -n "$tab_id" ]] || return 1
             pane_id="$(_mux_herdr_agent_pane_id_by_tab "$workspace_id" "$tab_id" "$target")"
             if [[ -n "$pane_id" ]]; then
-                herdr pane focus --pane "$pane_id" >/dev/null
+                herdr tab focus "$tab_id" >/dev/null
                 return 0
             fi
             herdr tab focus "$tab_id" >/dev/null
