@@ -217,9 +217,9 @@ build_entries() {
             targets="$(list_herdr_targets_by_workspace_id "$workspace_id")"
             marker="{$workspace_id}"
             if [[ -n "$current_session" && "$workspace_id" == "$current_session" ]]; then
-                echo "● $session  [$targets]  $marker"
+                printf '%s\t● [%s]  %s\n' "$session" "$targets" "$marker"
             else
-                echo "▸ $session  [$targets]  $marker"
+                printf '%s\t▸ [%s]  %s\n' "$session" "$targets" "$marker"
             fi
         done < <(herdr_workspace_records | sort)
     else
@@ -231,9 +231,9 @@ build_entries() {
         for session in $(printf '%s\n' "${!active_sessions[@]}" | sort); do
             local targets="${active_sessions[$session]}"
             if [[ -n "$current_session" && "$session" == "$current_session" ]]; then
-                echo "● $session  [$targets]"
+                printf '%s\t● [%s]\n' "$session" "$targets"
             else
-                echo "▸ $session  [$targets]"
+                printf '%s\t▸ [%s]\n' "$session" "$targets"
             fi
         done
     fi
@@ -241,7 +241,7 @@ build_entries() {
     while IFS='=' read -r name path; do
         [[ -z "$name" || "$name" == \#* ]] && continue
         if [[ -z "${active_sessions[$name]+_}" ]]; then
-            echo "  $name  ($path)"
+            printf '%s\t(%s)\n' "$name" "$path"
         fi
     done < "$PROJECTS_FILE"
 
@@ -278,6 +278,8 @@ while true; do
             --reverse \
             --no-sort \
             --cycle \
+            --delimiter=$'\t' \
+            --nth=1 \
             --expect=ctrl-x \
         || true)
 
@@ -308,7 +310,7 @@ while true; do
     fi
 
     active_workspace_id="$(sed -n 's/.*{\([^}]*\)}.*/\1/p' <<<"$selected")"
-    project_name=$(printf '%s\n' "$selected" | sed -E 's/^[[:space:]●▸]*//' | awk '{print $1}')
+    project_name=$(cut -f1 <<<"$selected")
     [[ -z "$project_name" ]] && exit 0
 
     is_active=false
