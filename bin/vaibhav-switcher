@@ -126,10 +126,13 @@ _herdr_workspace_id_by_label() {
 run_after_herdr_switcher_exits() {
     # Herdr closes the temporary command pane after this script exits. Delay
     # focus/open actions so that close does not restore the old workspace.
+    # Repeat because Herdr may restore the previous focus after the first call.
     if command -v setsid >/dev/null 2>&1; then
-        setsid -f sh -c 'sleep 1; "$@"' sh "$@" >/dev/null 2>&1
+        # shellcheck disable=SC2016 # evaluated by the delayed shell
+        setsid -f sh -c 'for delay in 0.5 1 2 3; do sleep "$delay"; "$@" >/dev/null 2>&1 || true; done' sh "$@" >/dev/null 2>&1
     else
-        nohup sh -c 'sleep 1; "$@"' sh "$@" >/dev/null 2>&1 &
+        # shellcheck disable=SC2016 # evaluated by the delayed shell
+        nohup sh -c 'for delay in 0.5 1 2 3; do sleep "$delay"; "$@" >/dev/null 2>&1 || true; done' sh "$@" >/dev/null 2>&1 &
     fi
 }
 
