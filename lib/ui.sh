@@ -23,7 +23,7 @@ show_usage() {
     echo -e "${BOLD}Usage:${NC}"
     echo "  vaibhav init                Interactive setup"
     echo "  vaibhav list                List all projects and active sessions"
-    echo "  vaibhav <name>              Open a project in tmux"
+    echo "  vaibhav <name>              Open a project in the configured multiplexer"
     echo "  vaibhav <name> <tool>       Open a project with an AI tool (amp, claude, codex, opencode, pi)"
     echo "  vaibhav <name> --mosh       Open a project using mosh (resilient connection)"
     echo "  vaibhav <name> <tool> --mosh  Open with an AI tool via mosh"
@@ -51,9 +51,9 @@ show_usage() {
     echo "  vaibhav ralph init          Setup ralph config for current project"
     echo ""
     if [[ -n "$VAIBHAV_MUX_BACKEND" ]]; then
-        echo -e "${BOLD}Multiplexer:${NC} tmux"
+        echo -e "${BOLD}Multiplexer:${NC} ${VAIBHAV_MUX_BACKEND}"
     else
-        echo -e "${BOLD}Multiplexer:${NC} ${DIM}tmux not found${NC}"
+        echo -e "${BOLD}Multiplexer:${NC} ${DIM}${VAIBHAV_MULTIPLEXER:-auto} not found${NC}"
     fi
     echo -e "${BOLD}Config:${NC} ${CONFIG_FILE}"
 }

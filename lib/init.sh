@@ -40,7 +40,7 @@ VAIBHAV_DESKTOP_HOST="${desktop_host}"
 VAIBHAV_SSH_HOST="${ssh_host}"
 VAIBHAV_USE_MOSH="${use_mosh}"
 VAIBHAV_MOSH_NO_INIT="${current_mosh_no_init}"
-VAIBHAV_MULTIPLEXER="tmux"
+VAIBHAV_MULTIPLEXER="tmux"  # tmux or herdr
 EOF
 
     echo ""

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# vaibhav - Project session manager for AI coding tools over tmux
+# shellcheck disable=SC1091 # VAIBHAV_LIB is resolved relative to this script at runtime
+# vaibhav - Project session manager for AI coding tools over a terminal multiplexer
 # Usage:
 #   vaibhav init              - Interactive setup (creates ~/.config/vaibhav/config)
 #   vaibhav list              - List all registered projects and active sessions
@@ -35,13 +36,9 @@ source "$VAIBHAV_LIB/mux.sh"
 
 # --- Resolve multiplexer backend ---
 # shellcheck disable=SC2034 # used by sourced lib modules
-VAIBHAV_MULTIPLEXER="tmux"
+VAIBHAV_MULTIPLEXER="$(normalize_multiplexer_preference "${VAIBHAV_MULTIPLEXER:-tmux}")"
 # shellcheck disable=SC2034 # used by sourced lib modules
-if command -v tmux &>/dev/null; then
-    VAIBHAV_MUX_BACKEND="tmux"
-else
-    VAIBHAV_MUX_BACKEND=""
-fi
+VAIBHAV_MUX_BACKEND="$(resolve_multiplexer_backend "$VAIBHAV_MULTIPLEXER")"
 
 # --- Remote dispatch (may exec into SSH/mosh and never return) ---
 # shellcheck source=../lib/remote.sh

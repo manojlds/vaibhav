@@ -57,7 +57,7 @@ list_projects() {
             fi
         done <<< "$active_sessions"
         if [[ -n "$orphans" ]]; then
-            echo -e "${BOLD}Other tmux sessions${NC}"
+            echo -e "${BOLD}Other $(mux_backend_name) sessions${NC}"
             echo ""
             echo -e "$orphans"
         fi
@@ -102,9 +102,9 @@ remove_project() {
 
     # Kill active session if present
     if mux_session_exists "$name"; then
-        read -rp "Kill active tmux session '$name'? [y/N] " yn
+        read -rp "Kill active $(mux_backend_name) session '$name'? [y/N] " yn
         if [[ "$yn" =~ ^[Yy]$ ]]; then
-            tmux kill-session -t "$name"
+            mux_kill_session "$name"
             echo -e "  ${DIM}Session killed${NC}"
         fi
     fi
@@ -125,21 +125,21 @@ kill_project() {
         # Kill specific window
         if ! mux_target_exists "$name" "$window"; then
             echo -e "${RED}Error:${NC} Window '${window}' not found in session '${name}'"
-            echo -e "${DIM}Active windows:${NC}"
-            tmux list-windows -t "$name" -F "  #{window_index}: #{window_name}" 2>/dev/null
+            echo -e "${DIM}Active $(mux_target_name_plural):${NC}"
+            mux_list_targets "$name" | sed 's/^/  /'
             exit 1
         fi
 
-        tmux kill-window -t "${name}:${window}"
-        echo -e "${GREEN}✓${NC} Killed window ${CYAN}${window}${NC} in ${CYAN}${name}${NC}"
+        mux_kill_target "$name" "$window"
+        echo -e "${GREEN}✓${NC} Killed $(mux_target_name) ${CYAN}${window}${NC} in ${CYAN}${name}${NC}"
     else
-        # Kill entire session — show windows first
+        # Kill entire session — show targets first
         echo -e "${BOLD}Session:${NC} ${CYAN}${name}${NC}"
-        tmux list-windows -t "$name" -F "  #{window_index}: #{window_name}" 2>/dev/null
+        mux_list_targets "$name" | sed 's/^/  /'
         echo ""
         read -rp "Kill entire session? [y/N] " yn
         if [[ "$yn" =~ ^[Yy]$ ]]; then
-            tmux kill-session -t "$name"
+            mux_kill_session "$name"
             echo -e "${GREEN}✓${NC} Session ${CYAN}${name}${NC} killed"
         fi
     fi
@@ -206,46 +206,34 @@ open_project() {
 
     require_mux_backend || exit 1
 
-    # Create or attach to tmux session
-    if tmux has-session -t "$name" 2>/dev/null; then
+    # Create or attach to project session.
+    if mux_session_exists "$name"; then
         # Session exists
         if [[ -n "$tool" ]]; then
             # Create a new window for the tool if not already running
             local tool_window="${tool}"
-            if tmux list-windows -t "$name" -F "#{window_name}" | grep -qx "$tool_window"; then
+            if mux_target_exists "$name" "$tool_window"; then
                 # Tool window exists, select it
-                tmux select-window -t "${name}:${tool_window}"
+                mux_select_target "$name" "$tool_window"
             else
                 # Create new window with the tool
-                tmux new-window -t "$name" -n "$tool_window" -c "$path" "$tool"
+                mux_create_target "$name" "$tool_window" "$path" "$tool"
             fi
         fi
 
         # Attach or switch
-        if [[ -n "${TMUX:-}" ]]; then
-            tmux switch-client -t "$name"
-        else
-            tmux attach-session -t "$name"
-        fi
+        mux_switch_or_attach "$name"
     else
         # Create new session
         if [[ -n "$tool" ]]; then
             # Create session with tool in first window
-            tmux new-session -d -s "$name" -c "$path" -n "$tool" "$tool"
-            # Add a shell window
-            tmux new-window -t "$name" -n "shell" -c "$path"
-            # Go back to tool window
-            tmux select-window -t "${name}:${tool}"
+            mux_create_session "$name" "$path" "$tool" "$tool"
         else
             # Create session with shell
-            tmux new-session -d -s "$name" -c "$path" -n "shell"
+            mux_create_session "$name" "$path" "shell"
         fi
 
         # Attach or switch
-        if [[ -n "${TMUX:-}" ]]; then
-            tmux switch-client -t "$name"
-        else
-            tmux attach-session -t "$name"
-        fi
+        mux_switch_or_attach "$name"
     fi
 }

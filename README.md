@@ -91,8 +91,12 @@ VAIBHAV_SSH_HOST="desktop"                    # SSH host alias
 VAIBHAV_LAN_HOST="mypc.local"                 # Optional LAN target (mDNS hostname or LAN IP) for auto-switch on home Wi-Fi
 VAIBHAV_USE_MOSH="false"                      # Use mosh by default (true/false)
 VAIBHAV_MOSH_NO_INIT="true"                   # Pass --no-init to mosh (better touch scroll in Termux)
-VAIBHAV_MULTIPLEXER="tmux"                    # tmux
+VAIBHAV_MULTIPLEXER="tmux"                    # tmux or herdr
 ```
+
+Set `VAIBHAV_MULTIPLEXER="herdr"` to use [Herdr](https://herdr.dev/) as an
+agent-aware alternative multiplexer. Vaibhav maps projects to Herdr workspaces
+and tool launches to Herdr agent panes.
 
 Project registry is stored at `~/.config/vaibhav/projects`.
 
