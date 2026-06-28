@@ -18,6 +18,7 @@ VAIBHAV_VERSION="0.10.7"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
 CONFIG_FILE="$CONFIG_DIR/config"
 PROJECTS_FILE="$CONFIG_DIR/projects"
+VAIBHAV_MULTIPLEXER_ENV="${VAIBHAV_MULTIPLEXER-}"
 
 # Resolve lib directory relative to this script (follows symlinks)
 VAIBHAV_LIB="$(cd "$(dirname "$(readlink -f "$0")")/../lib" && pwd)"
@@ -26,6 +27,9 @@ VAIBHAV_LIB="$(cd "$(dirname "$(readlink -f "$0")")/../lib" && pwd)"
 if [[ -f "$CONFIG_FILE" ]]; then
     # shellcheck source=/dev/null
     source "$CONFIG_FILE"
+fi
+if [[ -n "$VAIBHAV_MULTIPLEXER_ENV" ]]; then
+    VAIBHAV_MULTIPLEXER="$VAIBHAV_MULTIPLEXER_ENV"
 fi
 
 # --- Source library modules ---
