@@ -14,10 +14,10 @@ if [[ -f "$CONFIG_FILE" ]]; then
 fi
 
 mux_backend=""
-if [[ -n "${TMUX:-}" ]]; then
-    mux_backend="tmux"
-elif [[ -n "${HERDR_ENV:-}" || -n "${HERDR_ACTIVE_WORKSPACE_ID:-}" || -n "${HERDR_WORKSPACE_ID:-}" ]]; then
+if [[ -n "${HERDR_ENV:-}" || -n "${HERDR_ACTIVE_WORKSPACE_ID:-}" || -n "${HERDR_WORKSPACE_ID:-}" ]]; then
     mux_backend="herdr"
+elif [[ -n "${TMUX:-}" ]]; then
+    mux_backend="tmux"
 elif [[ "${VAIBHAV_MULTIPLEXER:-}" == "herdr" ]] && command -v herdr >/dev/null 2>&1; then
     mux_backend="herdr"
 fi
