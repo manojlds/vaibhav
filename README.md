@@ -98,6 +98,10 @@ Set `VAIBHAV_MULTIPLEXER="herdr"` to use [Herdr](https://herdr.dev/) as an
 agent-aware alternative multiplexer. Vaibhav maps projects to Herdr workspaces
 and tool launches to Herdr agent panes.
 
+`vaibhav-switcher` works with both tmux and Herdr. In Herdr, bind it as a
+custom command (for example `alt+s`) to open registered Vaibhav projects that
+do not have a workspace yet.
+
 Project registry is stored at `~/.config/vaibhav/projects`.
 
 ## Updating

@@ -1,20 +1,42 @@
 #!/usr/bin/env bash
-# vaibhav-switcher — fuzzy project/session switcher for tmux
+# vaibhav-switcher — fuzzy project/session switcher for vaibhav multiplexers
 # Active sessions: switch / kill. Inactive projects: pick a tool and start.
 # Intended to be launched from multiplexer keybindings (Alt+s).
 set -euo pipefail
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vaibhav"
+CONFIG_FILE="$CONFIG_DIR/config"
 PROJECTS_FILE="$CONFIG_DIR/projects"
 
-if [[ -z "${TMUX:-}" ]]; then
-    echo "Error: not inside tmux" >&2
+if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+
+mux_backend=""
+if [[ -n "${TMUX:-}" ]]; then
+    mux_backend="tmux"
+elif [[ -n "${HERDR_ENV:-}" || -n "${HERDR_ACTIVE_WORKSPACE_ID:-}" || -n "${HERDR_WORKSPACE_ID:-}" ]]; then
+    mux_backend="herdr"
+elif [[ "${VAIBHAV_MULTIPLEXER:-}" == "herdr" ]] && command -v herdr >/dev/null 2>&1; then
+    mux_backend="herdr"
+fi
+
+if [[ -z "$mux_backend" ]]; then
+    echo "Error: not inside a supported multiplexer" >&2
     exit 1
 fi
 
 notify() {
     local msg="$1"
-    tmux display-message "$msg" || true
+    case "$mux_backend" in
+        tmux)
+            tmux display-message "$msg" || true
+            ;;
+        herdr)
+            herdr notification show "vaibhav" --body "$msg" >/dev/null 2>&1 || printf '%s\n' "$msg" >&2
+            ;;
+    esac
 }
 
 if ! command -v fzf >/dev/null 2>&1; then
@@ -28,16 +50,60 @@ if [[ ! -f "$PROJECTS_FILE" ]]; then
 fi
 
 list_sessions() {
-    tmux list-sessions -F '#{session_name}' 2>/dev/null || true
+    case "$mux_backend" in
+        tmux)
+            tmux list-sessions -F '#{session_name}' 2>/dev/null || true
+            ;;
+        herdr)
+            herdr workspace list 2>/dev/null \
+                | grep -Eo '"label":"[^"]+"' \
+                | sed 's/^"label":"//; s/"$//' || true
+            ;;
+    esac
 }
 
 list_targets() {
     local session="$1"
-    tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
+    case "$mux_backend" in
+        tmux)
+            tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
+            ;;
+        herdr)
+            local workspace_id
+            workspace_id="$(_herdr_workspace_id_by_label "$session")"
+            [[ -n "$workspace_id" ]] || return 0
+            herdr tab list --workspace "$workspace_id" 2>/dev/null \
+                | grep -Eo '"label":"[^"]+"' \
+                | sed 's/^"label":"//; s/"$//' \
+                | tr '\n' ' ' \
+                | sed 's/ $//' || true
+            ;;
+    esac
 }
 
 current_session_name() {
-    tmux display-message -p '#{session_name}' 2>/dev/null || true
+    case "$mux_backend" in
+        tmux)
+            tmux display-message -p '#{session_name}' 2>/dev/null || true
+            ;;
+        herdr)
+            local workspace_id
+            workspace_id="${HERDR_ACTIVE_WORKSPACE_ID:-${HERDR_WORKSPACE_ID:-}}"
+            [[ -n "$workspace_id" ]] || return 0
+            herdr workspace get "$workspace_id" 2>/dev/null \
+                | sed -n 's/.*"label":"\([^"]*\)".*/\1/p' \
+                | head -1 || true
+            ;;
+    esac
+}
+
+_herdr_workspace_id_by_label() {
+    local label="$1"
+    herdr workspace list 2>/dev/null \
+        | tr '{' '\n' \
+        | grep -F "\"label\":\"${label}\"" \
+        | sed -n 's/.*"workspace_id":"\([^"]*\)".*/\1/p' \
+        | head -1 || true
 }
 
 is_active_session() {
@@ -47,27 +113,63 @@ is_active_session() {
 
 kill_session() {
     local session="$1"
-    tmux kill-session -t "$session"
+    case "$mux_backend" in
+        tmux)
+            tmux kill-session -t "$session"
+            ;;
+        herdr)
+            local workspace_id
+            workspace_id="$(_herdr_workspace_id_by_label "$session")"
+            [[ -n "$workspace_id" ]] && herdr workspace close "$workspace_id" >/dev/null
+            ;;
+    esac
 }
 
 detach_current() {
-    tmux detach-client
+    case "$mux_backend" in
+        tmux)
+            tmux detach-client
+            ;;
+        herdr)
+            notify "Use Herdr detach binding: prefix+q"
+            ;;
+    esac
 }
 
 switch_session() {
     local session="$1"
-    tmux switch-client -t "$session"
+    case "$mux_backend" in
+        tmux)
+            tmux switch-client -t "$session"
+            ;;
+        herdr)
+            local workspace_id
+            workspace_id="$(_herdr_workspace_id_by_label "$session")"
+            [[ -n "$workspace_id" ]] && herdr workspace focus "$workspace_id" >/dev/null
+            ;;
+    esac
 }
 
 start_project() {
     local project_name="$1"
     local tool="${2:-}"
 
-    if [[ -n "$tool" ]]; then
-        tmux run-shell -b "$HOME/bin/vaibhav '$project_name' '$tool'"
-    else
-        tmux run-shell -b "$HOME/bin/vaibhav '$project_name'"
-    fi
+    case "$mux_backend" in
+        tmux)
+            if [[ -n "$tool" ]]; then
+                tmux run-shell -b "$HOME/bin/vaibhav '$project_name' '$tool'"
+            else
+                tmux run-shell -b "$HOME/bin/vaibhav '$project_name'"
+            fi
+            ;;
+        herdr)
+            if [[ -n "$tool" ]]; then
+                "$HOME/bin/vaibhav" "$project_name" "$tool"
+            else
+                "$HOME/bin/vaibhav" "$project_name"
+            fi
+            ;;
+    esac
 }
 
 build_entries() {
