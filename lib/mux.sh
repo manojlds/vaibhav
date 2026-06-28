@@ -110,6 +110,16 @@ _mux_herdr_tab_id_by_label() {
         | head -1 || true
 }
 
+_mux_herdr_agent_pane_id_by_tab() {
+    local workspace_id="$1" tab_id="$2" agent="$3"
+    herdr pane list --workspace "$workspace_id" 2>/dev/null \
+        | _mux_herdr_json_objects \
+        | grep -F "\"tab_id\":\"${tab_id}\"" \
+        | grep -E "\"(agent|label)\":\"${agent}\"" \
+        | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' \
+        | head -1 || true
+}
+
 _mux_herdr_labels_from_json() {
     grep -Eo '"label":"[^"]+"' \
         | sed 's/^"label":"//; s/"$//'
@@ -244,11 +254,23 @@ mux_create_target() {
             local workspace_id tab_id pane_id
             workspace_id="$(_mux_herdr_workspace_id_by_label "$session")"
             [[ -n "$workspace_id" ]] || return 1
-            tab_id="$(herdr tab create --workspace "$workspace_id" --cwd "$path" --label "$target" --focus \
-                | sed -n 's/.*"tab_id":"\([^"]*\)".*/\1/p')"
+            tab_id="$(_mux_herdr_tab_id_by_label "$workspace_id" "$target")"
+            if [[ -n "$tab_id" && -n "$command" ]]; then
+                pane_id="$(_mux_herdr_agent_pane_id_by_tab "$workspace_id" "$tab_id" "$target")"
+                if [[ -n "$pane_id" ]]; then
+                    herdr pane focus --pane "$pane_id" >/dev/null
+                    return 0
+                fi
+            fi
+            if [[ -z "$tab_id" ]]; then
+                tab_id="$(herdr tab create --workspace "$workspace_id" --cwd "$path" --label "$target" --focus \
+                    | sed -n 's/.*"tab_id":"\([^"]*\)".*/\1/p')"
+            else
+                herdr tab focus "$tab_id" >/dev/null 2>&1 || true
+            fi
             [[ -n "$tab_id" ]] || return 1
             if [[ -n "$command" ]]; then
-                herdr agent start "$target" --cwd "$path" --workspace "$workspace_id" --tab "$tab_id" -- "$command" >/dev/null
+                herdr agent start "$target" --cwd "$path" --workspace "$workspace_id" --tab "$tab_id" --focus -- "$command" >/dev/null
             else
                 pane_id="$(herdr pane list --workspace "$workspace_id" \
                     | _mux_herdr_json_objects \
@@ -271,11 +293,16 @@ mux_select_target() {
             tmux select-window -t "${session}:${target}"
             ;;
         herdr)
-            local workspace_id tab_id
+            local workspace_id tab_id pane_id
             workspace_id="$(_mux_herdr_workspace_id_by_label "$session")"
             [[ -n "$workspace_id" ]] || return 1
             tab_id="$(_mux_herdr_tab_id_by_label "$workspace_id" "$target")"
             [[ -n "$tab_id" ]] || return 1
+            pane_id="$(_mux_herdr_agent_pane_id_by_tab "$workspace_id" "$tab_id" "$target")"
+            if [[ -n "$pane_id" ]]; then
+                herdr pane focus --pane "$pane_id" >/dev/null
+                return 0
+            fi
             herdr tab focus "$tab_id" >/dev/null
             ;;
     esac

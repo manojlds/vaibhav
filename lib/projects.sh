@@ -212,7 +212,9 @@ open_project() {
         if [[ -n "$tool" ]]; then
             # Create a new window for the tool if not already running
             local tool_window="${tool}"
-            if mux_target_exists "$name" "$tool_window"; then
+            if [[ "$VAIBHAV_MUX_BACKEND" == "herdr" ]]; then
+                mux_create_target "$name" "$tool_window" "$path" "$tool"
+            elif mux_target_exists "$name" "$tool_window"; then
                 # Tool window exists, select it
                 mux_select_target "$name" "$tool_window"
             else
