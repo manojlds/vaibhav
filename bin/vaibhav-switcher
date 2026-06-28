@@ -81,20 +81,37 @@ list_targets() {
     esac
 }
 
+list_herdr_targets_by_workspace_id() {
+    local workspace_id="$1"
+    [[ -n "$workspace_id" ]] || return 0
+    herdr tab list --workspace "$workspace_id" 2>/dev/null \
+        | grep -Eo '"label":"[^"]+"' \
+        | sed 's/^"label":"//; s/"$//' \
+        | tr '\n' ' ' \
+        | sed 's/ $//' || true
+}
+
 current_session_name() {
     case "$mux_backend" in
         tmux)
             tmux display-message -p '#{session_name}' 2>/dev/null || true
             ;;
         herdr)
-            local workspace_id
-            workspace_id="${HERDR_ACTIVE_WORKSPACE_ID:-${HERDR_WORKSPACE_ID:-}}"
-            [[ -n "$workspace_id" ]] || return 0
-            herdr workspace get "$workspace_id" 2>/dev/null \
-                | sed -n 's/.*"label":"\([^"]*\)".*/\1/p' \
-                | head -1 || true
+            printf '%s\n' "${HERDR_ACTIVE_WORKSPACE_ID:-${HERDR_WORKSPACE_ID:-}}"
             ;;
     esac
+}
+
+herdr_workspace_records() {
+    herdr workspace list 2>/dev/null \
+        | tr '{' '\n' \
+        | grep '"workspace_id":"' \
+        | while IFS= read -r obj; do
+            local label workspace_id
+            label="$(sed -n 's/.*"label":"\([^"]*\)".*/\1/p' <<<"$obj")"
+            workspace_id="$(sed -n 's/.*"workspace_id":"\([^"]*\)".*/\1/p' <<<"$obj")"
+            [[ -n "$label" && -n "$workspace_id" ]] && printf '%s|%s\n' "$label" "$workspace_id"
+        done
 }
 
 _herdr_workspace_id_by_label() {
@@ -106,6 +123,12 @@ _herdr_workspace_id_by_label() {
         | head -1 || true
 }
 
+run_after_herdr_switcher_exits() {
+    # Herdr closes the temporary command pane after this script exits. Delay
+    # focus/open actions so that close does not restore the old workspace.
+    nohup sh -c 'sleep 1; "$@"' sh "$@" >/dev/null 2>&1 &
+}
+
 is_active_session() {
     local session="$1"
     list_sessions | grep -qx "$session" 2>/dev/null
@@ -113,13 +136,14 @@ is_active_session() {
 
 kill_session() {
     local session="$1"
+    local workspace_id="${2:-}"
     case "$mux_backend" in
         tmux)
             tmux kill-session -t "$session"
             ;;
         herdr)
-            local workspace_id
-            workspace_id="$(_herdr_workspace_id_by_label "$session")"
+            workspace_id="${workspace_id:-$(_herdr_workspace_id_by_label "$session")}"
+            workspace_id="${workspace_id//[[:space:]]/}"
             [[ -n "$workspace_id" ]] && herdr workspace close "$workspace_id" >/dev/null
             ;;
     esac
@@ -138,14 +162,17 @@ detach_current() {
 
 switch_session() {
     local session="$1"
+    local workspace_id="${2:-}"
     case "$mux_backend" in
         tmux)
             tmux switch-client -t "$session"
             ;;
         herdr)
-            local workspace_id
-            workspace_id="$(_herdr_workspace_id_by_label "$session")"
-            [[ -n "$workspace_id" ]] && herdr workspace focus "$workspace_id" >/dev/null
+            workspace_id="${workspace_id:-$(_herdr_workspace_id_by_label "$session")}"
+            workspace_id="${workspace_id//[[:space:]]/}"
+            if [[ -n "$workspace_id" ]]; then
+                run_after_herdr_switcher_exits herdr workspace focus "$workspace_id"
+            fi
             ;;
     esac
 }
@@ -164,9 +191,9 @@ start_project() {
             ;;
         herdr)
             if [[ -n "$tool" ]]; then
-                "$HOME/bin/vaibhav" "$project_name" "$tool"
+                run_after_herdr_switcher_exits "$HOME/bin/vaibhav" "$project_name" "$tool"
             else
-                "$HOME/bin/vaibhav" "$project_name"
+                run_after_herdr_switcher_exits "$HOME/bin/vaibhav" "$project_name"
             fi
             ;;
     esac
@@ -176,19 +203,34 @@ build_entries() {
     local current_session="$1"
 
     declare -A active_sessions=()
-    while IFS= read -r session; do
-        [[ -z "$session" ]] && continue
-        active_sessions["$session"]="$(list_targets "$session")"
-    done < <(list_sessions | sort)
+    if [[ "$mux_backend" == "herdr" ]]; then
+        while IFS='|' read -r session workspace_id; do
+            [[ -z "$session" || -z "$workspace_id" ]] && continue
+            active_sessions["$session"]=1
+            local targets marker
+            targets="$(list_herdr_targets_by_workspace_id "$workspace_id")"
+            marker="{$workspace_id}"
+            if [[ -n "$current_session" && "$workspace_id" == "$current_session" ]]; then
+                echo "● $session  [$targets]  $marker"
+            else
+                echo "▸ $session  [$targets]  $marker"
+            fi
+        done < <(herdr_workspace_records | sort)
+    else
+        while IFS= read -r session; do
+            [[ -z "$session" ]] && continue
+            active_sessions["$session"]="$(list_targets "$session")"
+        done < <(list_sessions | sort)
 
-    for session in $(printf '%s\n' "${!active_sessions[@]}" | sort); do
-        local targets="${active_sessions[$session]}"
-        if [[ -n "$current_session" && "$session" == "$current_session" ]]; then
-            echo "● $session  [$targets]"
-        else
-            echo "▸ $session  [$targets]"
-        fi
-    done
+        for session in $(printf '%s\n' "${!active_sessions[@]}" | sort); do
+            local targets="${active_sessions[$session]}"
+            if [[ -n "$current_session" && "$session" == "$current_session" ]]; then
+                echo "● $session  [$targets]"
+            else
+                echo "▸ $session  [$targets]"
+            fi
+        done
+    fi
 
     while IFS='=' read -r name path; do
         [[ -z "$name" || "$name" == \#* ]] && continue
@@ -257,11 +299,16 @@ while true; do
         exit 0
     fi
 
+    active_workspace_id="$(sed -n 's/.*{\([^}]*\)}.*/\1/p' <<<"$selected")"
     project_name=$(printf '%s\n' "$selected" | sed -E 's/^[[:space:]●▸]*//' | awk '{print $1}')
     [[ -z "$project_name" ]] && exit 0
 
     is_active=false
-    is_active_session "$project_name" && is_active=true
+    if [[ -n "$active_workspace_id" ]]; then
+        is_active=true
+    else
+        is_active_session "$project_name" && is_active=true
+    fi
 
     if [[ "$key" == "ctrl-x" ]]; then
         if [[ "$is_active" == "true" ]]; then
@@ -269,14 +316,14 @@ while true; do
                 notify "Cannot kill current session"
                 sleep 0.5
             else
-                kill_session "$project_name" || true
+                kill_session "$project_name" "$active_workspace_id" || true
             fi
         fi
         continue
     fi
 
     if [[ "$is_active" == "true" ]]; then
-        switch_session "$project_name"
+        switch_session "$project_name" "$active_workspace_id"
         exit 0
     fi
 
