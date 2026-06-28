@@ -245,9 +245,9 @@ build_entries() {
         fi
     done < "$PROJECTS_FILE"
 
-    echo ""
-    echo "✕ Kill all sessions"
     if [[ "$mux_backend" == "tmux" ]]; then
+        echo ""
+        echo "✕ Kill all sessions"
         echo "⏏ Detach"
     fi
 }
@@ -292,7 +292,7 @@ while true; do
         exit 0
     fi
 
-    if [[ "$selected" == "✕ Kill all sessions" ]]; then
+    if [[ "$mux_backend" == "tmux" && "$selected" == "✕ Kill all sessions" ]]; then
         killed=0
         while IFS= read -r session; do
             [[ -z "$session" ]] && continue
@@ -320,7 +320,10 @@ while true; do
 
     if [[ "$key" == "ctrl-x" ]]; then
         if [[ "$is_active" == "true" ]]; then
-            if [[ -n "$current_session" && "$project_name" == "$current_session" ]]; then
+            if [[ -n "$active_workspace_id" && "$active_workspace_id" == "$current_session" ]]; then
+                notify "Cannot close current workspace"
+                sleep 0.5
+            elif [[ -z "$active_workspace_id" && -n "$current_session" && "$project_name" == "$current_session" ]]; then
                 notify "Cannot kill current session"
                 sleep 0.5
             else
