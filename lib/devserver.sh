@@ -4,6 +4,12 @@
 DEVSERVERS_FILE="$CONFIG_DIR/devservers"
 DEVSERVER_TS_PORT_START=10443
 
+# Out-of-repo pitchfork configs. If $DEVSERVERS_CONFIG_DIR/<project>/pitchfork.toml
+# exists it is used instead of the project's own pitchfork.toml, so a repo needs no
+# changes to be served. Daemons there should set an absolute `dir` into the repo.
+# A `.vaibhav-devservers` override file can sit alongside it.
+DEVSERVERS_CONFIG_DIR="$CONFIG_DIR/devservers.d"
+
 # Optional per-project process metadata override file.
 # Format (either style):
 #   process|port|http
@@ -74,6 +80,16 @@ _ds_has_pitchfork() {
     [[ -f "$project_path/pitchfork.toml" ]]
 }
 
+_ds_config_dir() {
+    # Directory pitchfork runs from: external config dir if present, else the project.
+    local project="$1" project_path="$2"
+    if _ds_has_pitchfork "$DEVSERVERS_CONFIG_DIR/$project"; then
+        echo "$DEVSERVERS_CONFIG_DIR/$project"
+    else
+        echo "$project_path"
+    fi
+}
+
 _ds_resolve_project_context() {
     # Usage: _ds_resolve_project_context <arg1> <arg2>
     # Prints: project|project_path|process
@@ -100,7 +116,7 @@ _ds_resolve_project_context() {
     fi
 
     # If current directory is a project with pitchfork, treat arg1 as process name.
-    if _ds_has_pitchfork "$PWD"; then
+    if _ds_has_pitchfork "$PWD" || _ds_has_pitchfork "$DEVSERVERS_CONFIG_DIR/$(basename "$PWD")"; then
         project="$(basename "$PWD")"
         project_path="$PWD"
         process="$arg1"
@@ -416,14 +432,17 @@ dev_start() {
         return 1
     fi
 
-    if ! _ds_has_pitchfork "$project_path"; then
-        echo -e "${RED}Error:${NC} No pitchfork.toml found in ${project_path}"
+    local pf_dir
+    pf_dir="$(_ds_config_dir "$project" "$project_path")"
+
+    if ! _ds_has_pitchfork "$pf_dir"; then
+        echo -e "${RED}Error:${NC} No pitchfork.toml found in ${project_path} or ${DEVSERVERS_CONFIG_DIR}/${project}"
         echo -e "${DIM}Add a [daemons.<name>] block in pitchfork.toml first.${NC}"
         return 1
     fi
 
     local metadata
-    if ! metadata="$(_ds_extract_pitchfork_metadata "$project_path")"; then
+    if ! metadata="$(_ds_extract_pitchfork_metadata "$pf_dir")"; then
         echo -e "${RED}Error:${NC} Failed to read pitchfork daemon metadata for ${project}"
         return 1
     fi
@@ -475,9 +494,9 @@ dev_start() {
         metadata_inline="${metadata_blob//$'\n'/ }"
         metadata_inline="${metadata_inline//|//}"
 
-        meta_port="$(_ds_process_port_from_meta "$project_path" "$name")"
+        meta_port="$(_ds_process_port_from_meta "$pf_dir" "$name")"
         port="$meta_port"
-        http_mode="$(_ds_process_http_mode_from_meta "$project_path" "$name")"
+        http_mode="$(_ds_process_http_mode_from_meta "$pf_dir" "$name")"
         candidate_ports="$(_ds_detect_ports_from_metadata "$metadata_blob")"
         ui_port="$(_ds_detect_ui_port_from_metadata "$metadata_blob")"
         ready_port="$(_ds_detect_ready_port_from_metadata "$metadata_blob")"
@@ -519,7 +538,7 @@ dev_start() {
             max_attempts=20
         fi
 
-        if _ds_process_running "$project_path" "$name" "$port"; then
+        if _ds_process_running "$pf_dir" "$name" "$port"; then
             is_running=true
         elif [[ -z "$meta_port" && -n "$candidate_ports" ]]; then
             detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
@@ -531,8 +550,8 @@ dev_start() {
 
         if [[ "$is_running" == "false" ]]; then
             local start_output
-            if ! start_output="$(cd "$project_path" && pitchfork start "$name" 2>&1)"; then
-                if _ds_process_running "$project_path" "$name" "$port"; then
+            if ! start_output="$(cd "$pf_dir" && pitchfork start "$name" 2>&1)"; then
+                if _ds_process_running "$pf_dir" "$name" "$port"; then
                     is_running=true
                 elif [[ -z "$meta_port" && -n "$candidate_ports" ]]; then
                     detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
@@ -555,7 +574,7 @@ dev_start() {
 
         if [[ "$is_running" == "false" ]]; then
             for (( _attempt=1; _attempt<=max_attempts; _attempt++ )); do
-                if _ds_process_running "$project_path" "$name" "$port"; then
+                if _ds_process_running "$pf_dir" "$name" "$port"; then
                     is_running=true
                 elif [[ -z "$meta_port" && -n "$candidate_ports" ]]; then
                     detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
@@ -600,7 +619,7 @@ dev_start() {
         else
             any_failed=true
             echo -e "  ${YELLOW}Warning:${NC} ${name} is not running"
-            echo -e "  ${DIM}hint:${NC} cd ${project_path} && pitchfork logs ${name}"
+            echo -e "  ${DIM}hint:${NC} cd ${pf_dir} && pitchfork logs ${name}"
         fi
 
         if [[ -n "$port" ]]; then
@@ -640,6 +659,9 @@ dev_stop() {
         return 1
     fi
 
+    local pf_dir
+    pf_dir="$(_ds_config_dir "$project" "$project_path")"
+
     step "Stopping pitchfork process(es) for ${project}${process:+ (${process})}"
 
     if [[ -n "$process" ]]; then
@@ -653,7 +675,7 @@ dev_stop() {
         fi
 
         local stop_output
-        if ! stop_output="$(cd "$project_path" && pitchfork stop "$process" 2>&1)"; then
+        if ! stop_output="$(cd "$pf_dir" && pitchfork stop "$process" 2>&1)"; then
             if grep -qi 'not found' <<<"$stop_output"; then
                 echo -e "${RED}Error:${NC} Process '${process}' not found in ${project}"
                 return 1
@@ -662,7 +684,7 @@ dev_stop() {
 
         local still_running=false
         for _attempt in 1 2 3; do
-            if _ds_process_running "$project_path" "$process" "$port"; then
+            if _ds_process_running "$pf_dir" "$process" "$port"; then
                 still_running=true
                 sleep 1
             else
@@ -684,8 +706,8 @@ dev_stop() {
         return 0
     fi
 
-    if _ds_has_pitchfork "$project_path"; then
-        (cd "$project_path" && pitchfork stop --local >/dev/null 2>&1) || true
+    if _ds_has_pitchfork "$pf_dir"; then
+        (cd "$pf_dir" && pitchfork stop --local >/dev/null 2>&1) || true
     fi
 
     local entries
@@ -696,7 +718,7 @@ dev_stop() {
         while IFS='|' read -r _ process_name port tsport task_meta; do
             [[ -z "$process_name" ]] && continue
 
-            if _ds_process_running "$project_path" "$process_name" "$port"; then
+            if _ds_process_running "$pf_dir" "$process_name" "$port"; then
                 had_failure=true
                 echo -e "  ${YELLOW}Warning:${NC} ${process_name} still appears to be running"
                 if [[ -n "$tsport" ]] && [[ -n "$port" ]]; then
@@ -744,7 +766,7 @@ dev_list() {
 
         local project_path status
         project_path="$(get_project_path "$project")"
-        if [[ -n "$project_path" ]] && _ds_process_running "$project_path" "$process" "$port"; then
+        if [[ -n "$project_path" ]] && _ds_process_running "$(_ds_config_dir "$project" "$project_path")" "$process" "$port"; then
             status="${GREEN}running${NC}"
         else
             status="${RED}stopped${NC}"

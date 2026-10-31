@@ -165,6 +165,19 @@ temporal-server||nohttp
 ```
 
 Fields are `process|port|http_mode` where `http_mode` is `http` or `nohttp`.
+An explicit port here wins over ports sniffed from the daemon command.
+
+To serve a repo without adding anything to it, put the config outside the repo
+at `~/.config/vaibhav/devservers.d/<project>/pitchfork.toml` (with an optional
+`.vaibhav-devservers` next to it). When present it is used instead of the
+project's own `pitchfork.toml`; give each daemon an absolute `dir` into the repo:
+
+```toml
+[daemons.web]
+dir = "/home/me/projects/myapp/packages/web"
+run = "pnpm exec vite --host 127.0.0.1 --port 5174"
+ready_http = "http://127.0.0.1:5174/"
+```
 
 Each project should also define tool/runtime versions in `mise.toml` so
 pitchfork starts are consistent on local and remote environments.
