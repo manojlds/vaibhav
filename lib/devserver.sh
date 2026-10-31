@@ -521,7 +521,7 @@ dev_start() {
 
         if _ds_process_running "$project_path" "$name" "$port"; then
             is_running=true
-        elif [[ -n "$candidate_ports" ]]; then
+        elif [[ -z "$meta_port" && -n "$candidate_ports" ]]; then
             detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
             if [[ -n "$detected_port" ]]; then
                 port="$detected_port"
@@ -534,7 +534,7 @@ dev_start() {
             if ! start_output="$(cd "$project_path" && pitchfork start "$name" 2>&1)"; then
                 if _ds_process_running "$project_path" "$name" "$port"; then
                     is_running=true
-                elif [[ -n "$candidate_ports" ]]; then
+                elif [[ -z "$meta_port" && -n "$candidate_ports" ]]; then
                     detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
                     if [[ -n "$detected_port" ]]; then
                         port="$detected_port"
@@ -557,7 +557,7 @@ dev_start() {
             for (( _attempt=1; _attempt<=max_attempts; _attempt++ )); do
                 if _ds_process_running "$project_path" "$name" "$port"; then
                     is_running=true
-                elif [[ -n "$candidate_ports" ]]; then
+                elif [[ -z "$meta_port" && -n "$candidate_ports" ]]; then
                     detected_port="$(_ds_first_open_port_from_list "$candidate_ports" || true)"
                     if [[ -n "$detected_port" ]]; then
                         port="$detected_port"
@@ -685,7 +685,7 @@ dev_stop() {
     fi
 
     if _ds_has_pitchfork "$project_path"; then
-        (cd "$project_path" && pitchfork stop --all >/dev/null 2>&1) || true
+        (cd "$project_path" && pitchfork stop --local >/dev/null 2>&1) || true
     fi
 
     local entries
